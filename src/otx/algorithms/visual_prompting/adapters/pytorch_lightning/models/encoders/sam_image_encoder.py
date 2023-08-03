@@ -7,6 +7,9 @@
 from omegaconf import DictConfig
 from torch import Tensor, nn
 
+from otx.algorithms.visual_prompting.adapters.pytorch_lightning.models.backbones.tiny_vit import (
+    build_tiny_vit,
+)
 from otx.algorithms.visual_prompting.adapters.pytorch_lightning.models.backbones.vit import (
     build_vit,
 )
@@ -21,7 +24,9 @@ class SAMImageEncoder(nn.Module):
 
     def __init__(self, config: DictConfig):
         super().__init__()
-        if "vit" in config.backbone:
+        if config.backbone == "tiny_vit":
+            self.backbone = build_tiny_vit()
+        elif "vit" in config.backbone:
             self.backbone = build_vit(config.backbone, config.image_size)
         else:
             raise NotImplementedError(

@@ -4,3 +4,4 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .vit import ViT  # noqa: F401
+from .tiny_vit import TinyViT  # noqa: F401
