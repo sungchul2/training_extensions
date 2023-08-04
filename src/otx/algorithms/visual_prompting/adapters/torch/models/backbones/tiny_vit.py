@@ -623,8 +623,9 @@ class TinyViT(nn.Module):
         return x
 
 
-def build_tiny_vit(drop_path_rate=0.0):
+def build_tiny_vit(img_size: int = 1024, drop_path_rate: float = 0.0):
     return TinyViT(
+        img_size=img_size,
         num_classes=1,
         embed_dims=[64, 128, 160, 320],
         depths=[2, 2, 6, 2],
