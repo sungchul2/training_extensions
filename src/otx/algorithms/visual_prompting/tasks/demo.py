@@ -4,6 +4,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from PIL import Image
+from sklearn.cluster import DBSCAN
+from sklearn.utils import shuffle
 from torch.nn import functional as F
 
 from otx.algorithms.visual_prompting.adapters.pytorch_lightning.datasets.pipelines.sam_transforms import (
@@ -442,8 +444,14 @@ class PerSAM(nn.Module):
 
 class PerSAMZeroShotLearningInferencer:
     """Inferencer for PerSAM zero-shot learning."""
-    def __init__(self, backbone: str, device: str = "cuda"):
+    def __init__(
+        self,
+        backbone: str,
+        use_attn_sim: bool = False,
+        device: str = "cuda"
+    ):
         self.predictor = SamPredictor(PerSAM(backbone=backbone, device=device))
+        self.use_attn_sim = use_attn_sim
         self.threshold_ref: float = 0.3
         
         self._initialize_reference()
@@ -453,7 +461,7 @@ class PerSAMZeroShotLearningInferencer:
         self.target_feats: List[torch.Tensor] = []
         self.target_embeddings: List[torch.Tensor] = []
 
-    def _generate_ref_feature(self, input_prompts: Dict[str, Any]) -> Tuple[torch.Tensor]:
+    def _generate_ref_feature_mask(self, input_prompts: Dict[str, Any]) -> Tuple[torch.Tensor]:
         """Generate reference features."""
         # Image features encoding
         masks, scores, logits, _ = self.predictor.predict(**input_prompts, multimask_output=True)
@@ -476,7 +484,157 @@ class PerSAMZeroShotLearningInferencer:
         
         return target_feat, target_embedding, masks[best_idx]
 
-    def _infer_reference_prediction(self, images: np.ndarray, prompts: Dict[str, List[Any]]):
+    def _generate_prompt_info(self, test_feat: torch.Tensor, test_image: np.ndarray):
+        # Cosine similarity
+        C, h, w = test_feat.shape
+        test_feat = test_feat / test_feat.norm(dim=0, keepdim=True)
+        test_feat = test_feat.reshape(C, h * w)
+        
+        num_classes = len(self.target_feats)
+        sims = []
+        for ref_feat in self.target_feats:
+            sim= ref_feat @ test_feat
+            sim = sim.reshape(1, 1, h, w)
+            sim = self.predictor.model.postprocess_masks(
+                            sim,
+                            input_size=self.predictor.input_size,
+                            original_size=self.predictor.original_size).squeeze()
+            sims.append(sim)
+
+        # Positive-negative location prior
+        topk_xys = []
+        topk_labels = []
+        attn_sims = []
+        topk = 0
+        for sim in sims:
+            if num_classes > 1:
+                threshold = 0.85 * sim.max()
+            else:
+                threshold = 0.65
+            topk_xy_i, topk_label_i = self._point_selection(sim, test_image, topk=topk, threshold=threshold)
+            topk_xys.append(topk_xy_i)
+            topk_labels.append(topk_label_i)
+
+            if self.use_attn_sim:
+                # Obtain the target guidance for cross-attention layers
+                sim = (sim - sim.mean()) / torch.std(sim)
+                sim = F.interpolate(sim.unsqueeze(0).unsqueeze(0), size=(h, w), mode="bilinear")
+                attn_sim = sim.sigmoid_().unsqueeze(0).flatten(3)
+                attn_sims.append(attn_sim)
+
+        return topk_xys, topk_labels, attn_sims
+
+    def _point_selection(
+        self,
+        mask_sim: torch.Tensor,
+        test_image: np.ndarray,
+        topk: int = 1,
+        threshold: float = 0.8
+    ) -> Tuple[Dict, Dict]:
+        # Top-1 point selection
+        h, w = mask_sim.shape
+        topk_xy = {}
+        topk_label = {}
+        last_xy = None
+        last_xy = mask_sim.flatten(0).topk(1, largest=False)[1]
+        last_x = (last_xy // w).unsqueeze(0)
+        last_y = (last_xy - last_x * w)
+        last_xy = torch.cat((last_y, last_x), dim=0).permute(1, 0)
+        last_xy = last_xy.cpu().numpy()
+
+        if topk > 0:
+            # Top-last point selection
+            topk_xy = mask_sim.flatten(0).topk(topk)[1]
+            topk_x = (topk_xy // w).unsqueeze(0)
+            topk_y = (topk_xy - topk_x * w)
+            topk_xy = torch.cat((topk_y, topk_x), dim=0).permute(1, 0)
+            topk_label[0] = np.array([1] * topk)
+            topk_xy[0] = topk_xy.cpu().numpy()
+            topk_xy[0].append([last_xy[0][0], last_xy[0][1]])
+            topk_label[0].append(0)
+
+        else:
+            sim_points = (mask_sim >= threshold)
+            np_xy = torch.nonzero(sim_points*mask_sim)
+            np_xy = shuffle(np_xy.cpu().detach().numpy(), random_state=0)
+
+            h, w, c = test_image.shape
+            max_len = h
+            if max_len < w:
+                max_len = w
+
+            ratio = 1024.0 / max_len
+            h = int(h * ratio)
+            w = int(w * ratio)
+            n_w = w // 16
+            for i in range(len(np_xy)):
+                x = np_xy[i][1]
+                y = np_xy[i][0]
+                key = int((int(y*ratio)//16)*n_w) + int(x*ratio)//16
+                if key not in topk_xy.keys():
+                    topk_xy[key] = [[x,y]]
+                    topk_label[key] = [1]
+                elif len(topk_xy[key]) < 1:
+                    topk_xy[key].append([x,y])
+                    topk_label[key].append(1)
+
+            for i in topk_label.keys():
+                topk_xy[i].append([last_xy[0][0], last_xy[0][1]])
+                topk_label[i].append(0)
+            
+        return topk_xy, topk_label
+
+    def _predict_mask(
+        self,
+        prompt_points: torch.Tensor,
+        prompt_labels: torch.Tensor,
+        attention: Optional[torch.Tensor] = None,
+        embedding: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        # First-step prediction
+        if attention is not None and embedding is not None:
+            masks, scores, logits, _ = self.predictor.predict(
+                point_coords=prompt_points, 
+                point_labels=prompt_labels, 
+                multimask_output=False,
+                attn_sim=attention,  # Target-guided Attention
+                target_embedding=embedding  # Target-semantic Prompting
+            )
+        else:
+            masks, scores, logits, _ = self.predictor.predict(
+                point_coords=prompt_points, 
+                point_labels=prompt_labels, 
+                multimask_output=False
+            )
+        best_idx = 0
+
+        # Cascaded Post-refinement-1
+        masks, scores, logits, _ = self.predictor.predict(
+                    point_coords=prompt_points,
+                    point_labels=prompt_labels,
+                    mask_input=logits[best_idx: best_idx + 1, :, :], 
+                    multimask_output=True)
+        best_idx = np.argmax(scores)
+
+        # Cascaded Post-refinement-2
+        y, x = np.nonzero(masks[best_idx])
+        x_min = x.min()
+        x_max = x.max()
+        y_min = y.min()
+        y_max = y.max()
+        input_box = np.array([x_min, y_min, x_max, y_max])
+        masks, scores, logits, _ = self.predictor.predict(
+            point_coords=prompt_points,
+            point_labels=prompt_labels,
+            box=input_box[None, :],
+            mask_input=logits[best_idx: best_idx + 1, :, :], 
+            multimask_output=True)
+        
+        best_idx = np.argmax(scores)
+        
+        return masks[best_idx]
+
+    def _infer_reference_prediction(self, images: np.ndarray, prompts: Dict[str, List[Any]]) -> List[torch.Tensor]:
         """Reference prediction.
         
         Args:
@@ -494,7 +652,7 @@ class PerSAMZeroShotLearningInferencer:
                 input_prompts = {prompt_type: prompt}
                 if prompt_type == "point_coords":
                     input_prompts["point_labels"] = prompts.get("point_labels")[i]
-                target_feat, target_embedding, ref_mask = self._generate_ref_feature(input_prompts)
+                target_feat, target_embedding, ref_mask = self._generate_ref_feature_mask(input_prompts)
                 self.target_feats.append(target_feat)
                 self.target_embeddings.append(target_embedding)
                 ref_masks.append(ref_mask)
@@ -502,10 +660,44 @@ class PerSAMZeroShotLearningInferencer:
         self.is_set_ref_feat = True
         return ref_masks
 
-    def _infer_referring_segmentation(self):
-        pass
+    def _infer_referring_segmentation(self, images: List[np.ndarray]):
+        """Referring segmentation using reference features.
+        
+        Args:
+            images (list):
+        """
+        total_best_masks = []
+        for image in images:
+            self.predictor.set_image(image)
+            test_feat = self.predictor.features.squeeze()
+            topk_xys, topk_labels, attn_sims = self._generate_prompt_info(test_feat, image)
+            best_masks = []
+            for i in range(len(topk_xys)):
+                best_mask = None
+                for j in topk_xys[i].keys():
+                    inputs = dict(
+                        prompt_points=np.array(topk_xys[i].get(j)),
+                        prompt_labels=np.array(topk_labels[i].get(j)),
+                    )
+                    if best_mask is not None and best_mask[inputs["prompt_points"][0][1], inputs["prompt_points"][0][0]] > 0:
+                        # if given prompt value in best_mask is already assigned
+                        continue
 
-    def infer(self, images: Union[List[Any], np.ndarray, Image.Image], prompts: Dict[str, Any], params: Any) -> Any:
+                    if self.use_attn_sim:
+                        inputs.update(dict(
+                            attention=attn_sims[i],
+                            embedding=self.target_embeddings[i],
+                        ))
+                    mask = self._predict_mask(**inputs)
+                    if best_mask is None:
+                        best_mask = mask
+                    else:
+                        best_mask += mask
+                best_masks.append(best_mask)
+            total_best_masks.append(best_masks)
+        return total_best_masks
+
+    def infer(self, images: Union[List[Any], np.ndarray, Image.Image], params: Dict[str, Any], prompts: Optional[Dict[str, Any]] = None) -> Any:
         """Inference for zero-shot learning using PerSAM.
         
         This inference supports three inference types:
@@ -516,10 +708,12 @@ class PerSAMZeroShotLearningInferencer:
         """
         if isinstance(images, Image.Image):
             images = np.array(images, dtype=np.uint8)
+        if isinstance(images, list) and any(not isinstance(image, np.ndarray) for image in images):
+            images = [np.array(image) for image in images]
 
         if params.get("type") == "ref_pred":
             assert isinstance(images, np.ndarray), f"images must be np.ndarray, given {type(images)}."
             return self._infer_reference_prediction(images, prompts)
         
         elif params.get("type") == "refer_seg":
-            return self._infer_referring_segmentation()
+            return self._infer_referring_segmentation(images)
