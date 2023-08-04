@@ -7,7 +7,7 @@
 from omegaconf import DictConfig
 from torch import Tensor, nn
 
-from otx.algorithms.visual_prompting.adapters.pytorch_lightning.models.backbones.tiny_vit import (
+from otx.algorithms.visual_prompting.adapters.torch.models.backbones.tiny_vit import (
     build_tiny_vit,
 )
 from otx.algorithms.visual_prompting.adapters.pytorch_lightning.models.backbones.vit import (
