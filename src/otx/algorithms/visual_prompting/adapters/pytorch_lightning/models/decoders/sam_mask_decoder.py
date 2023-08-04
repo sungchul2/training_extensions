@@ -5,7 +5,7 @@
 #
 
 import math
-from typing import List, Tuple, Type
+from typing import List, Optional, Tuple, Type
 
 import torch
 from torch import Tensor, nn
@@ -70,6 +70,8 @@ class SAMMaskDecoder(nn.Module):
         sparse_prompt_embeddings: Tensor,
         dense_prompt_embeddings: Tensor,
         multimask_output: bool,
+        attn_sim: Optional[Tensor] = None,
+        target_embedding: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Tensor]:
         """Predict masks given image and prompt embeddings.
 
@@ -89,6 +91,8 @@ class SAMMaskDecoder(nn.Module):
             image_pe=image_pe,
             sparse_prompt_embeddings=sparse_prompt_embeddings,
             dense_prompt_embeddings=dense_prompt_embeddings,
+            attn_sim=attn_sim,
+            target_embedding=target_embedding
         )
 
         # Select the correct mask or masks for output
@@ -108,6 +112,8 @@ class SAMMaskDecoder(nn.Module):
         image_pe: Tensor,
         sparse_prompt_embeddings: Tensor,
         dense_prompt_embeddings: Tensor,
+        attn_sim: Optional[Tensor] = None,
+        target_embedding: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Tensor]:
         """Predicts masks. See 'forward' for more details.
 
@@ -133,7 +139,7 @@ class SAMMaskDecoder(nn.Module):
         b, c, h, w = src.shape
 
         # Run the transformer
-        hs, src = self.transformer(src, pos_src, tokens)
+        hs, src = self.transformer(src, pos_src, tokens, attn_sim, target_embedding)
         iou_token_out = hs[:, 0, :]
         mask_tokens_out = hs[:, 1 : (1 + self.num_mask_tokens), :]
 
@@ -243,6 +249,8 @@ class TwoWayTransformer(nn.Module):
         image_embedding: Tensor,
         image_pe: Tensor,
         point_embedding: Tensor,
+        attn_sim: Optional[Tensor] = None,
+        target_embedding: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Tensor]:
         """Apply the transformer to the image and point embeddings.
 
@@ -251,6 +259,8 @@ class TwoWayTransformer(nn.Module):
             image_pe (Tensor): Positional encoding to add to the image. Must have the same shape as image_embedding.
             point_embedding (Tensor): Embedding to add to the query points. Must have shape B x N_points x embedding_dim
                 for any N_points.
+            attn_sim (Tensor, optional): ...
+            target_embedding (Tensor, optional): ...
 
         Returns:
             Tensor: Processed point_embedding with shape B x N_points x embedding_dim for any N_points.
@@ -267,16 +277,21 @@ class TwoWayTransformer(nn.Module):
 
         # Apply transformer blocks and final layernorm
         for layer in self.layers:
+            if target_embedding is not None:
+                queries += target_embedding
             queries, keys = layer(
                 queries=queries,
                 keys=keys,
                 query_pe=point_embedding,
                 key_pe=image_pe,
+                attn_sim=attn_sim,
             )
 
         # Apply the final attention layer from the points to the image
         q = queries + point_embedding
         k = keys + image_pe
+        if target_embedding is not None:
+            q += target_embedding
         attn_out = self.final_attn_token_to_image(q=q, k=k, v=keys)
         queries = queries + attn_out
         queries = self.norm_final_attn(queries)
@@ -325,7 +340,7 @@ class TwoWayAttentionBlock(nn.Module):
 
         self.skip_first_layer_pe = skip_first_layer_pe
 
-    def forward(self, queries: Tensor, keys: Tensor, query_pe: Tensor, key_pe: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward(self, queries: Tensor, keys: Tensor, query_pe: Tensor, key_pe: Tensor, attn_sim: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
         """Apply the transformer block to the queries and keys.
 
         Args:
@@ -333,6 +348,7 @@ class TwoWayAttentionBlock(nn.Module):
             keys (Tensor): Keys to attend to. Should be shape B x N_keys x C for any N_keys.
             query_pe (Tensor): Positional encoding to add to the queries. Must have the same shape as queries.
             key_pe (Tensor): Positional encoding to add to the keys. Must have the same shape as keys.
+            attn_sim (Tensor, optional): ...
 
         Returns:
             Tensor: Processed queries.
@@ -350,7 +366,7 @@ class TwoWayAttentionBlock(nn.Module):
         # Cross attention block, tokens attending to image embedding
         q = queries + query_pe
         k = keys + key_pe
-        attn_out = self.cross_attn_token_to_image(q=q, k=k, v=keys)
+        attn_out = self.cross_attn_token_to_image(q=q, k=k, v=keys, attn_sim=attn_sim)
         queries = queries + attn_out
         queries = self.norm2(queries)
 
@@ -425,13 +441,14 @@ class Attention(nn.Module):
         x = x.transpose(1, 2)
         return x.reshape(b, n_tokens, n_heads * c_per_head)  # B x N_tokens x C
 
-    def forward(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
+    def forward(self, q: Tensor, k: Tensor, v: Tensor, attn_sim: Optional[Tensor] = None) -> Tensor:
         """Apply the attention layer to the queries, keys, and values.
 
         Args:
             q (Tensor): Queries to attend to. Should be shape B x N_queries x C for any N_queries.
             k (Tensor): Keys to attend to. Should be shape B x N_keys x C for any N_keys.
             v (Tensor): Values to attend to. Should be shape B x N_values x C for any N_values.
+            attn_sim (Tensor, optional): ...
 
         Returns:
             Tensor: The output of the attention layer. Shape B x N_queries x C.
@@ -451,6 +468,10 @@ class Attention(nn.Module):
         attn = q @ k.permute(0, 1, 3, 2)  # B x N_heads x N_tokens x N_tokens
         attn = attn / math.sqrt(c_per_head)
         attn = torch.softmax(attn, dim=-1)
+
+        if attn_sim is not None:
+            attn = attn + attn_sim
+            attn = torch.softmax(attn, dim=-1)
 
         # Get output
         out = attn @ v
