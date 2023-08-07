@@ -1,10 +1,10 @@
+from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 import torch.nn as nn
 from PIL import Image
-from sklearn.cluster import DBSCAN
 from sklearn.utils import shuffle
 from torch.nn import functional as F
 
@@ -634,19 +634,23 @@ class PerSAMZeroShotLearningInferencer:
         
         return masks[best_idx]
 
-    def _infer_reference_prediction(self, images: np.ndarray, prompts: Dict[str, List[Any]]) -> List[torch.Tensor]:
+    def _infer_reference_prediction(self, images: np.ndarray, prompts: Dict[str, List[Any]], params: Dict[str, Any]) -> Dict[str, Any]:
         """Reference prediction.
+
+        Reference prediction using given prompts. These results will be saved at `results_reference` in result dict.
         
         Args:
             images (np.ndarray): Reference image to be predicted by using given prompts.
             prompts (dict): 
+            params (dict): Parameters for reference prediction.
+                - do_ref_seg : If True, referring segmentation using the source image will be executed, defaults to False.
         """
         if self.is_set_ref_feat:
             print(f"[*] Reinitialize reference image & feature.")
             self._initialize_reference()
 
         self.predictor.set_image(images)
-        ref_masks = []
+        ref_masks = defaultdict(list)
         for prompt_type in ["point_coords", "box"]:
             for i, prompt in enumerate(prompts.get(prompt_type, [])):
                 input_prompts = {prompt_type: prompt}
@@ -655,12 +659,14 @@ class PerSAMZeroShotLearningInferencer:
                 target_feat, target_embedding, ref_mask = self._generate_ref_feature_mask(input_prompts)
                 self.target_feats.append(target_feat)
                 self.target_embeddings.append(target_embedding)
-                ref_masks.append(ref_mask)
+                ref_masks["results_reference"].append(ref_mask)
 
         self.is_set_ref_feat = True
+        if params.get("do_ref_seg", False):
+            ref_masks["results_referring"] += self._infer_referring_segmentation([images])[0]
         return ref_masks
 
-    def _infer_referring_segmentation(self, images: List[np.ndarray]):
+    def _infer_referring_segmentation(self, images: List[np.ndarray]) -> List[List[torch.Tensor]]:
         """Referring segmentation using reference features.
         
         Args:
@@ -713,7 +719,7 @@ class PerSAMZeroShotLearningInferencer:
 
         if params.get("type") == "ref_pred":
             assert isinstance(images, np.ndarray), f"images must be np.ndarray, given {type(images)}."
-            return self._infer_reference_prediction(images, prompts)
+            return self._infer_reference_prediction(images, prompts, params)
         
         elif params.get("type") == "refer_seg":
             return self._infer_referring_segmentation(images)
