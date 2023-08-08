@@ -457,21 +457,24 @@ class PerSAMZeroShotLearningInferencer:
         self._initialize_reference()
 
     def _initialize_reference(self):
-        self.is_set_ref_feat: bool = False
         self.target_feats: List[torch.Tensor] = []
         self.target_embeddings: List[torch.Tensor] = []
+        self.ref_logit = None
 
-    def _generate_ref_feature_mask(self, input_prompts: Dict[str, Any]) -> Tuple[torch.Tensor]:
-        """Generate reference features."""
-        # Image features encoding
-        masks, scores, logits, _ = self.predictor.predict(**input_prompts, multimask_output=True)
-        best_idx = np.argmax(scores)
+    def _generate_ref_feature_mask(self, ref_feat: torch.Tensor, ref_mask: torch.Tensor) -> Tuple[torch.Tensor]:
+        """Generate reference features.
 
-        ref_feat = self.predictor.features.squeeze().permute(1, 2, 0)
+        It should be run whenever the masks are predicted to get reference features corresponding to the masks.
         
+        Args:
+            ref_feat (torch.Tensor):
+            ref_mask (torch.Tensor):
+
+        Returns:
+            (torch.Tensor): 
+            (torch.Tensor):
+        """
         # Post-process ref_mask
-        ref_mask = masks[best_idx].astype(float)
-        ref_mask = torch.from_numpy(ref_mask)
         ref_mask = F.interpolate(ref_mask.unsqueeze(0).unsqueeze(0), size=self.predictor.input_size, mode="bilinear").squeeze()
         ref_mask = self.predictor.model.preprocess_mask(ref_mask)
         ref_mask = F.interpolate(ref_mask.unsqueeze(0).unsqueeze(0), size=ref_feat.shape[0: 2], mode="bilinear").squeeze()
@@ -482,7 +485,7 @@ class PerSAMZeroShotLearningInferencer:
         target_feat = target_embedding / target_embedding.norm(dim=-1, keepdim=True)
         target_embedding = target_embedding.unsqueeze(0)
         
-        return target_feat, target_embedding, masks[best_idx]
+        return target_feat, target_embedding
 
     def _generate_prompt_info(self, test_feat: torch.Tensor, test_image: np.ndarray):
         # Cosine similarity
@@ -634,34 +637,64 @@ class PerSAMZeroShotLearningInferencer:
         
         return masks[best_idx]
 
-    def _infer_reference_prediction(self, images: np.ndarray, prompts: Dict[str, List[Any]], params: Dict[str, Any]) -> Dict[str, Any]:
+    def _infer_reference_prediction(
+        self,
+        images: np.ndarray,
+        prompts: List[Dict[str, Any]],
+        params: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Reference prediction.
 
         Reference prediction using given prompts. These results will be saved at `results_reference` in result dict.
         
         Args:
             images (np.ndarray): Reference image to be predicted by using given prompts.
-            prompts (dict): 
+            prompts (list): List of multi class prompts.
             params (dict): Parameters for reference prediction.
+                - reset_feat : If True, reset reference features using a new given image and prompts, defaults to False.
                 - do_ref_seg : If True, referring segmentation using the source image will be executed, defaults to False.
         """
-        if self.is_set_ref_feat:
+        if params.get("reset_feat", False):
             print(f"[*] Reinitialize reference image & feature.")
             self._initialize_reference()
 
         self.predictor.set_image(images)
         ref_masks = defaultdict(list)
-        for prompt_type in ["point_coords", "box"]:
-            for i, prompt in enumerate(prompts.get(prompt_type, [])):
-                input_prompts = {prompt_type: prompt}
-                if prompt_type == "point_coords":
-                    input_prompts["point_labels"] = prompts.get("point_labels")[i]
-                target_feat, target_embedding, ref_mask = self._generate_ref_feature_mask(input_prompts)
-                self.target_feats.append(target_feat)
-                self.target_embeddings.append(target_embedding)
-                ref_masks["results_reference"].append(ref_mask)
+        for prompt in prompts:
+            if not (prompt.get("point_coords", None) is not None and prompt.get("point_labels", None) is not None):
+                print((
+                    f"If point_coords is set, point_labels must be also set: "
+                    f"point_coords: {prompt.get('point_coords', None)}\n"
+                    f"point_labels: {prompt.get('point_labels', None)}"
+                ))
+                continue
 
-        self.is_set_ref_feat = True
+            if not (prompt.get("point_coords", None) is not None or prompt.get("box", None) is not None):
+                print((
+                    f"There should be at least one of point_coords and box: "
+                    f"point_coords: {prompt.get('point_coords', None)}\n"
+                    f"box: {prompt.get('box')}"
+                ))
+                continue
+
+            input_prompts = {
+                "point_coords": prompt.get("point_coords", None),
+                "point_labels": prompt.get("point_labels", None),
+                "box": prompt.get("box", None),
+                "mask_input": self.ref_logit
+            }
+            masks, scores, logits, _ = self.predictor.predict(**input_prompts, multimask_output=True)
+            best_idx = np.argmax(scores)
+
+            ref_feat = self.predictor.features.squeeze().permute(1, 2, 0)
+            ref_mask = torch.tensor(masks[best_idx], dtype=torch.float32)
+            target_feat, target_embedding = self._generate_ref_feature_mask(ref_feat, ref_mask)
+
+            self.target_feats.append(target_feat)
+            self.target_embeddings.append(target_embedding)
+            self.ref_logit = logits[best_idx]
+            ref_masks["results_reference"].append(masks[best_idx])
+
         if params.get("do_ref_seg", False):
             ref_masks["results_referring"] += self._infer_referring_segmentation([images])[0]
         return ref_masks
