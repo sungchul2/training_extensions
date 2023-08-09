@@ -4,4 +4,4 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-from .inferencer import ZeroShotLearningInferencer  # noqa: F401
+from .zero_shot_inferencer import ZeroShotLearningInferencer  # noqa: F401
