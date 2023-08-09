@@ -17,7 +17,7 @@ from otx.algorithms.visual_prompting.adapters.pytorch_lightning.datasets.dataset
     generate_bbox_from_mask,
     get_transform,
 )
-from otx.algorithms.visual_prompting.adapters.pytorch_lightning.datasets.pipelines import (
+from otx.algorithms.visual_prompting.adapters.torch.datasets.pipelines import (
     MultipleInputsCompose,
     Pad,
     ResizeLongestSide,

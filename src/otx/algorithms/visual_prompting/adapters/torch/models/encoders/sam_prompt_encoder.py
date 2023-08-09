@@ -10,9 +10,7 @@ import numpy as np
 import torch
 from torch import Tensor, nn
 
-from otx.algorithms.visual_prompting.adapters.pytorch_lightning.models.utils import (
-    LayerNorm2d,
-)
+from otx.algorithms.visual_prompting.adapters.torch.models.utils import LayerNorm2d
 
 
 class SAMPromptEncoder(nn.Module):

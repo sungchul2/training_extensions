@@ -20,10 +20,10 @@ from torch.nn import functional as F
 from torchmetrics import MeanMetric, MetricCollection
 from torchmetrics.classification import BinaryF1Score, BinaryJaccardIndex, Dice
 
-from otx.algorithms.visual_prompting.adapters.pytorch_lightning.models.decoders import (
+from otx.algorithms.visual_prompting.adapters.torch.models.decoders import (
     SAMMaskDecoder,
 )
-from otx.algorithms.visual_prompting.adapters.pytorch_lightning.models.encoders import (
+from otx.algorithms.visual_prompting.adapters.torch.models.encoders import (
     SAMImageEncoder,
     SAMPromptEncoder,
 )

@@ -10,16 +10,14 @@ import pytest
 import torch
 import torch.nn as nn
 
-from otx.algorithms.visual_prompting.adapters.pytorch_lightning.models.decoders.sam_mask_decoder import (
+from otx.algorithms.visual_prompting.adapters.torch.models.decoders.sam_mask_decoder import (
     MLP,
     Attention,
     SAMMaskDecoder,
     TwoWayAttentionBlock,
     TwoWayTransformer,
 )
-from otx.algorithms.visual_prompting.adapters.pytorch_lightning.models.utils import (
-    MLPBlock,
-)
+from otx.algorithms.visual_prompting.adapters.torch.models.utils import MLPBlock
 from tests.test_suite.e2e_test_system import e2e_pytest_unit
 
 

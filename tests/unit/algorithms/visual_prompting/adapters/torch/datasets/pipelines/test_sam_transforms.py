@@ -4,13 +4,14 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-import numpy as np
 from typing import Tuple
+
+import numpy as np
 import pytest
-from otx.algorithms.visual_prompting.adapters.pytorch_lightning.datasets.pipelines.sam_transforms import (
+
+from otx.algorithms.visual_prompting.adapters.torch.datasets.pipelines.sam_transforms import (
     ResizeLongestSide,
 )
-
 from tests.test_suite.e2e_test_system import e2e_pytest_unit
 
 

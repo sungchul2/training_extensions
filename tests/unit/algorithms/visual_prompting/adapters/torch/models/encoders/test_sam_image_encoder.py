@@ -4,12 +4,15 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-from tests.test_suite.e2e_test_system import e2e_pytest_unit
-from otx.algorithms.visual_prompting.adapters.pytorch_lightning.models.encoders.sam_image_encoder import SAMImageEncoder
 import pytest
-from omegaconf import DictConfig
-import torch.nn as nn
 import torch
+import torch.nn as nn
+from omegaconf import DictConfig
+
+from otx.algorithms.visual_prompting.adapters.torch.models.encoders.sam_image_encoder import (
+    SAMImageEncoder,
+)
+from tests.test_suite.e2e_test_system import e2e_pytest_unit
 
 
 class MockBackbone(nn.Module):
@@ -25,7 +28,7 @@ class TestSAMImageEncoder:
     @pytest.fixture(autouse=True)
     def setup(self, mocker) -> None:
         self.mocker_backbone = mocker.patch(
-            "otx.algorithms.visual_prompting.adapters.pytorch_lightning.models.encoders.sam_image_encoder.build_vit",
+            "otx.algorithms.visual_prompting.adapters.torch.models.encoders.sam_image_encoder.build_vit",
             return_value=MockBackbone(),
         )
 

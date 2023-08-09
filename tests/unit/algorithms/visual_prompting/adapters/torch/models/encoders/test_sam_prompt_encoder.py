@@ -10,7 +10,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from otx.algorithms.visual_prompting.adapters.pytorch_lightning.models.encoders.sam_prompt_encoder import (
+from otx.algorithms.visual_prompting.adapters.torch.models.encoders.sam_prompt_encoder import (
     PositionEmbeddingRandom,
     SAMPromptEncoder,
 )

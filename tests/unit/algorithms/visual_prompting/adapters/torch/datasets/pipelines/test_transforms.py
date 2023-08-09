@@ -6,13 +6,13 @@
 
 from typing import Any, Dict, Tuple
 
+import numpy as np
 import pytest
 import torch
 from torch import Tensor
-import numpy as np
 from torchvision.transforms import Normalize
 
-from otx.algorithms.visual_prompting.adapters.pytorch_lightning.datasets.pipelines.transforms import (
+from otx.algorithms.visual_prompting.adapters.torch.datasets.pipelines.transforms import (
     MultipleInputsCompose,
     Pad,
     collate_fn,

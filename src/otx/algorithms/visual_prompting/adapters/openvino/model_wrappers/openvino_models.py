@@ -23,7 +23,9 @@ from openvino.model_api.adapters.inference_adapter import InferenceAdapter
 from openvino.model_api.models import ImageModel, SegmentationModel
 from openvino.model_api.models.types import NumericalValue, StringValue
 
-from otx.algorithms.visual_prompting.adapters.pytorch_lightning.datasets.pipelines import ResizeLongestSide
+from otx.algorithms.visual_prompting.adapters.torch.datasets.pipelines import (
+    ResizeLongestSide,
+)
 from otx.api.utils.segmentation_utils import create_hard_prediction_from_soft_prediction
 
 

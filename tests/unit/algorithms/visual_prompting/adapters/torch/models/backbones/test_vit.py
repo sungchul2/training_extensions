@@ -11,7 +11,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from otx.algorithms.visual_prompting.adapters.pytorch_lightning.models.backbones.vit import (
+from otx.algorithms.visual_prompting.adapters.torch.models.backbones.vit import (
     Attention,
     Block,
     PatchEmbed,
@@ -22,9 +22,7 @@ from otx.algorithms.visual_prompting.adapters.pytorch_lightning.models.backbones
     window_partition,
     window_unpartition,
 )
-from otx.algorithms.visual_prompting.adapters.pytorch_lightning.models.utils import (
-    MLPBlock,
-)
+from otx.algorithms.visual_prompting.adapters.torch.models.utils import MLPBlock
 from tests.test_suite.e2e_test_system import e2e_pytest_unit
 
 
@@ -191,7 +189,7 @@ class TestPatchEmbed:
 @pytest.mark.parametrize("backbone", ["vit_b", "vit_l", "vit_h"])
 def test_build_vit(mocker, backbone: str):
     """Test build_vit."""
-    mocker_vit = mocker.patch("otx.algorithms.visual_prompting.adapters.pytorch_lightning.models.backbones.vit.ViT")
+    mocker_vit = mocker.patch("otx.algorithms.visual_prompting.adapters.torch.models.backbones.vit.ViT")
 
     _ = build_vit(backbone=backbone, image_size=1024)
 

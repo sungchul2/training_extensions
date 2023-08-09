@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from otx.algorithms.visual_prompting.adapters.pytorch_lightning.models.utils import (
+from otx.algorithms.visual_prompting.adapters.torch.models.utils import (
     LayerNorm2d,
     MLPBlock,
 )
