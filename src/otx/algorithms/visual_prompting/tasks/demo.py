@@ -460,6 +460,7 @@ class PerSAMZeroShotLearningInferencer:
         self.target_feats: List[torch.Tensor] = []
         self.target_embeddings: List[torch.Tensor] = []
         self.ref_logit = None
+        self.ref_masks = defaultdict(list)
 
     def _generate_ref_feature_mask(self, ref_feat: torch.Tensor, ref_mask: torch.Tensor) -> Tuple[torch.Tensor]:
         """Generate reference features.
@@ -659,7 +660,6 @@ class PerSAMZeroShotLearningInferencer:
             self._initialize_reference()
 
         self.predictor.set_image(images)
-        ref_masks = defaultdict(list)
         for prompt in prompts:
             if not (prompt.get("point_coords", None) is not None and prompt.get("point_labels", None) is not None):
                 print((
@@ -692,12 +692,13 @@ class PerSAMZeroShotLearningInferencer:
 
             self.target_feats.append(target_feat)
             self.target_embeddings.append(target_embedding)
-            self.ref_logit = logits[best_idx]
-            ref_masks["results_reference"].append(masks[best_idx])
+
+            self.ref_logit = logits[best_idx][None] if params.get("use_logit", False) else None
+            self.ref_masks["results_reference"].append(masks[best_idx])
 
         if params.get("do_ref_seg", False):
-            ref_masks["results_referring"] += self._infer_referring_segmentation([images])[0]
-        return ref_masks
+            self.ref_masks["results_referring"] += self._infer_referring_segmentation([images])[0]
+        return self.ref_masks
 
     def _infer_referring_segmentation(self, images: List[np.ndarray]) -> List[List[torch.Tensor]]:
         """Referring segmentation using reference features.
