@@ -7,6 +7,7 @@
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import cv2
 import numpy as np
 import torch
 from PIL import Image
@@ -208,6 +209,96 @@ class ZeroShotLearningProcessor:
         
         return masks[best_idx]
 
+    def _preprocess_prompts(
+        self,
+        prompts: List[Dict[str, Any]],
+        height: int,
+        width: int,
+        num_sample: int = 5,
+        convert_mask: bool = False
+    ) -> Dict[str, Dict[str, Any]]:
+        """Preprocess prompts.
+
+        This function proceeds such below thigs:
+            1. Gather prompts which have the same labels
+            2. If there are polygon prompts, convert them to a mask and randomly sample points
+            3. If there are box prompts, the key `point_coords` is changed to `box`
+        
+        Args:
+            prompts (list): Given prompts to be processed.
+            height (int): Image height.
+            width (int): Image width.
+            num_sample (int): The number of points to be sampled in a mask generated from given polygon, defaults to 5.
+            convert_mask (bool): Whether converting polygon to mask, defaults to False.
+            
+        Returns:
+            (dict): Processed and arranged prompts using label information as keys.
+                processed_prompts = {
+                    0: { # background
+                        "point_coords": np.ndarray(),
+                        "point_labels": np.ndarray(),
+                        "box": np.ndarray(),
+                    },
+                    1: {
+                        "point_coords": np.ndarray(),
+                        "point_labels": np.ndarray(),
+                        "box": np.ndarray(),
+                    },
+                    2: {
+                        "point_coords": np.ndarray(),
+                        "point_labels": np.ndarray(),
+                        "box": np.ndarray(),
+                    }
+                }
+        """
+        def update_value(target, key, value):
+            if key in target:
+                target[key] = np.concatenate((target[key], value))
+            else:
+                target[key] = value
+
+        processed_prompts: Dict[str, Dict[str, Any]] = {}
+        for prompt in prompts:
+            if prompt.get("label", 0) not in processed_prompts:
+                # initialize
+                processed_prompts[prompt.get("label", 0)] = defaultdict(dict)
+
+            if prompt.get("type") == "point":
+                update_value(processed_prompts[prompt.get("label", 0)], "point_coords", prompt.get("point_coords"))
+                update_value(processed_prompts[prompt.get("label", 0)], "point_labels", prompt.get("point_labels"))
+
+            elif prompt.get("type") == "polygon":
+                polygon = prompt.get("point_coords")
+                if convert_mask:
+                    # convert polygon to mask
+                    contour = [[int(point[0]), int(point[1])] for point in polygon]
+                    gt_mask = np.zeros((height, width), dtype=np.uint8)
+                    gt_mask = cv2.drawContours(gt_mask, np.asarray([contour]), 0, 1, -1)
+
+                    # randomly sample points from generated mask
+                    ys, xs, _ = np.nonzero(gt_mask)
+                else:
+                    ys, xs = polygon[:,1], polygon[:,0]
+                rand_idx = np.random.permutation(len(ys))[:num_sample]
+                point_coords = []
+                point_labels = []
+                for x, y in xs[rand_idx], ys[rand_idx]:
+                    point_coords.append([x, y])
+                    point_labels.append(prompt.get("point_labels")[0])
+                processed_prompts[prompt.get("label", 0)].update({
+
+                })
+
+            elif prompt.get("type") == "box":
+                processed_prompts[prompt.get("label", 0)].update({
+                    "box": prompt.get("point_coords"),
+                })
+        processed_prompts = dict(sorted(processed_prompts.items(), key=lambda x: x[0]))
+        return processed_prompts
+
+    def _merge_prompts(self):
+        pass
+
     def _infer_reference_prediction(
         self,
         images: np.ndarray,
@@ -220,40 +311,59 @@ class ZeroShotLearningProcessor:
         
         Args:
             images (np.ndarray): Reference image to be predicted by using given prompts.
-            prompts (list): List of multi class prompts.
+            prompts (list): List of multi class prompts. Both background prompt and foreground prompt have similar format,
+                but foreground prompt has label information, too. This given prompts will be processed at _preprocess_prompts.
+                Foreground prompts have `1` as point_labels and background prompts have `0` as point_labels.
+
+                [Example]
+                prompts = [
+                    {
+                        "type": "point",
+                        "point_coords": np.array([[100, 200]]),
+                        "point_labels": np.array([1]),
+                        "label": 1
+                    }, # foreground which has label 1 and type is point
+                    {
+                        "type": "point",
+                        "point_coords": np.array([[200, 200]]),
+                        "point_labels": np.array([0]),
+                    }, # background
+                    {
+                        "type": "polygon",
+                        "point_coords": np.array([[100, 300], [102, 298], ...]), # polygon of a scribble
+                        "point_labels": np.array([1]),
+                        "label": 2
+                    }, # foreground which has label 2 and type is polygon (scribble)
+                    {
+                        "type": "box",
+                        "point_coords": np.array([[100, 300], [400, 400]]), # (x1, y1), (x2, y2)
+                        "point_labels": np.array([1]),
+                        "label": 1
+                    }, # foreground which has label 1 but different prompt
+                ]
+
             params (dict): Parameters for reference prediction.
                 - reset_feat : Reset reference features using a new given image and prompts, defaults to True.
                 - do_ref_seg : Referring segmentation to targets using the source image will be executed, defaults to True.
+
+        Returns:
+            (dict): Reference prediction results.
         """
         if params.get("reset_feat", True):
             print(f"[*] Reinitialize reference image & feature.")
             self._initialize_reference()
 
+        height, width, _ = images.shape
         self.model.set_image(images)
         ref_masks = defaultdict(list)
-        for prompt in prompts:
-            if not (prompt.get("point_coords", None) is not None and prompt.get("point_labels", None) is not None):
-                print((
-                    f"If point_coords is set, point_labels must be also set: "
-                    f"point_coords: {prompt.get('point_coords', None)}\n"
-                    f"point_labels: {prompt.get('point_labels', None)}"
-                ))
+
+        processed_prompts = self._preprocess_prompts(prompts, height, width)
+        for label, input_prompts in processed_prompts.items():
+            if label == 0:
+                # background
                 continue
 
-            if not (prompt.get("point_coords", None) is not None or prompt.get("box", None) is not None):
-                print((
-                    f"There should be at least one of point_coords and box: "
-                    f"point_coords: {prompt.get('point_coords', None)}\n"
-                    f"box: {prompt.get('box')}"
-                ))
-                continue
-
-            input_prompts = {
-                "point_coords": prompt.get("point_coords", None),
-                "point_labels": prompt.get("point_labels", None),
-                "box": prompt.get("box", None),
-                "mask_input": self.ref_logit
-            }
+            input_prompts.update({"mask_input": self.ref_logit})
             masks, scores, logits, _ = self.model.predict(**input_prompts, multimask_output=True)
             best_idx = np.argmax(scores)
 
