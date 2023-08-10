@@ -22,21 +22,25 @@ class ZeroShotLearningProcessor:
         self,
         backbone: str,
         use_attn_sim: bool = False,
+        default_threshold_reference: float = 0.3,
+        default_threshold_target: float = 0.6,
         device: str = "cuda"
     ):
         self.model = SAM(backbone=backbone, device=device)
         self.use_attn_sim = use_attn_sim
-        self.threshold_ref: float = 0.3
+        self.default_threshold_reference = default_threshold_reference  # immutable
+        self.default_threshold_target = default_threshold_target
+        self.threshold_target: float
         
         self._initialize_reference()
 
-    def _initialize_reference(self):
+    def _initialize_reference(self) -> None:
         self.target_feats: List[torch.Tensor] = []
         self.target_embeddings: List[torch.Tensor] = []
         self.ref_logit = None
         self.ref_masks = defaultdict(list)
 
-    def _generate_ref_feature_mask(self, ref_feat: torch.Tensor, ref_mask: torch.Tensor) -> Tuple[torch.Tensor]:
+    def _generate_ref_feature_mask(self, ref_feat: torch.Tensor, ref_mask: torch.Tensor) -> Tuple[torch.Tensor, ...]:
         """Generate reference features.
 
         It should be run whenever the masks are predicted to get reference features corresponding to the masks.
@@ -55,14 +59,14 @@ class ZeroShotLearningProcessor:
         ref_mask = F.interpolate(ref_mask.unsqueeze(0).unsqueeze(0), size=ref_feat.shape[0: 2], mode="bilinear").squeeze()
         
         # Target feature extraction
-        target_feat = ref_feat[ref_mask > self.threshold_ref]
+        target_feat = ref_feat[ref_mask > self.default_threshold_reference]
         target_embedding = target_feat.mean(0).unsqueeze(0)    
         target_feat = target_embedding / target_embedding.norm(dim=-1, keepdim=True)
         target_embedding = target_embedding.unsqueeze(0)
         
         return target_feat, target_embedding
 
-    def _generate_prompt_info(self, test_feat: torch.Tensor, test_image: np.ndarray, topk: int = 0) -> Tuple[List]:
+    def _generate_prompt_info(self, test_feat: torch.Tensor, test_image: np.ndarray, topk: int = 0) -> Tuple[List, ...]:
         # Cosine similarity
         C, h, w = test_feat.shape
         test_feat = test_feat / test_feat.norm(dim=0, keepdim=True)
@@ -77,12 +81,12 @@ class ZeroShotLearningProcessor:
             sim= ref_feat @ test_feat
             sim = sim.reshape(1, 1, h, w)
             sim = self.model.postprocess_masks(
-                            sim,
-                            input_size=self.model.input_size,
-                            original_size=self.model.original_size).squeeze()
+                sim,
+                input_size=self.model.input_size,
+                original_size=self.model.original_size).squeeze()
 
-            threshold = 0.85 * sim.max() if num_classes > 1 else 0.65
-            topk_xy_i, topk_label_i = self._point_selection(sim, test_image, topk=topk, threshold=threshold)
+            # threshold = 0.85 * sim.max() if num_classes > 1 else 0.65
+            topk_xy_i, topk_label_i = self._point_selection(sim, test_image, topk=topk, threshold=self.threshold_target)
             topk_xys.append(topk_xy_i)
             topk_labels.append(topk_label_i)
 
@@ -101,7 +105,7 @@ class ZeroShotLearningProcessor:
         test_image: np.ndarray,
         topk: int = 1,
         threshold: float = 0.8
-    ) -> Tuple[Dict, Dict]:
+    ) -> Tuple[Dict, ...]:
         # Top-1 point selection
         h, w = mask_sim.shape
         topk_xy = {}
@@ -219,10 +223,10 @@ class ZeroShotLearningProcessor:
             images (np.ndarray): Reference image to be predicted by using given prompts.
             prompts (list): List of multi class prompts.
             params (dict): Parameters for reference prediction.
-                - reset_feat : If True, reset reference features using a new given image and prompts, defaults to False.
-                - do_ref_seg : If True, referring segmentation using the source image will be executed, defaults to False.
+                - reset_feat : Reset reference features using a new given image and prompts, defaults to True.
+                - do_ref_seg : Referring segmentation to targets using the source image will be executed, defaults to True.
         """
-        if params.get("reset_feat", False):
+        if params.get("reset_feat", True):
             print(f"[*] Reinitialize reference image & feature.")
             self._initialize_reference()
 
@@ -264,11 +268,11 @@ class ZeroShotLearningProcessor:
             self.ref_masks["results_reference"].append(masks[best_idx])
 
         if params.get("do_ref_seg", True):
-            self.ref_masks["results_referring"] += self._infer_referring_segmentation([images])[0]
+            self.ref_masks["results_target"] += self._infer_target_segmentation([images])[0]
         return self.ref_masks
 
-    def _infer_referring_segmentation(self, images: List[np.ndarray]) -> List[List[torch.Tensor]]:
-        """Referring segmentation using reference features.
+    def _infer_target_segmentation(self, images: List[np.ndarray]) -> List[List[torch.Tensor]]:
+        """Referring segmentation to targets using reference features.
         
         Args:
             images (list):
@@ -310,18 +314,20 @@ class ZeroShotLearningProcessor:
         This inference supports three inference types:
             1. Reference prediction
                 - Basic visual prompting inference to given reference image(s) using given prompts
-            2. Referring segmentation
+            2. Referring segmentation (target segmentation)
                 - Inference to other given test image(s) using reference feature
         """
-        if params.get("type") == "ref_pred":
+        self.threshold_target = params.get("threshold", self.default_threshold_target)
+
+        if params.get("type") == "reference":
             assert isinstance(images, (np.ndarray, Image.Image)), f"images must be np.ndarray or Image.Image, given {type(images)}."
             if isinstance(images, Image.Image):
                 images = np.array(images, dtype=np.uint8)
             return self._infer_reference_prediction(images, prompts, params)
         
-        elif params.get("type") == "refer_seg":
+        elif params.get("type") == "target":
             assert isinstance(images, (tuple, list)), f"images must be wrapped by iterable instances, list or tuple, given {type(images)}."
             assert any(isinstance(image, (np.ndarray, Image.Image)) for image in images), f"images must be set of np.ndarray or Image.Image."
             if any(not isinstance(image, np.ndarray) for image in images):
                 images = [np.array(image) for image in images]
-            return self._infer_referring_segmentation(images)
+            return self._infer_target_segmentation(images)
