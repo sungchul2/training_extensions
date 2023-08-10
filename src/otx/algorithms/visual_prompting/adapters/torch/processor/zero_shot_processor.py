@@ -38,7 +38,6 @@ class ZeroShotLearningProcessor:
         self.target_feats: List[torch.Tensor] = []
         self.target_embeddings: List[torch.Tensor] = []
         self.ref_logit = None
-        self.ref_masks = defaultdict(list)
 
     def _generate_ref_feature_mask(self, ref_feat: torch.Tensor, ref_mask: torch.Tensor) -> Tuple[torch.Tensor, ...]:
         """Generate reference features.
@@ -231,6 +230,7 @@ class ZeroShotLearningProcessor:
             self._initialize_reference()
 
         self.model.set_image(images)
+        ref_masks = defaultdict(list)
         for prompt in prompts:
             if not (prompt.get("point_coords", None) is not None and prompt.get("point_labels", None) is not None):
                 print((
@@ -265,11 +265,11 @@ class ZeroShotLearningProcessor:
             self.target_embeddings.append(target_embedding)
 
             self.ref_logit = logits[best_idx][None] if params.get("use_logit", False) else None
-            self.ref_masks["results_reference"].append(masks[best_idx])
+            ref_masks["results_reference"].append(masks[best_idx])
 
         if params.get("do_ref_seg", True):
-            self.ref_masks["results_target"] += self._infer_target_segmentation([images])[0]
-        return self.ref_masks
+            ref_masks["results_target"] += self._infer_target_segmentation([images])[0]
+        return ref_masks
 
     def _infer_target_segmentation(self, images: List[np.ndarray]) -> List[List[torch.Tensor]]:
         """Referring segmentation to targets using reference features.
