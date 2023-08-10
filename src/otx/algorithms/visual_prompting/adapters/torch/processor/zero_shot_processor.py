@@ -1,4 +1,4 @@
-"""Zero-shot inferencer for visual prompting model."""
+"""Zero-shot learning processor for visual prompting model."""
 
 # Copyright (C) 2023 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
@@ -16,8 +16,8 @@ from torch.nn import functional as F
 from otx.algorithms.visual_prompting.adapters.torch.models.visual_prompters import SAM
 
 
-class ZeroShotLearningInferencer:
-    """Inferencer for SAM zero-shot learning."""
+class ZeroShotLearningProcessor:
+    """Processor for SAM zero-shot learning."""
     def __init__(
         self,
         backbone: str,
