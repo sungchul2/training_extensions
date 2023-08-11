@@ -4,15 +4,13 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-import torch.nn as nn
+
+def build_prompter(type: str):
+    if type.lower() == "sam":
+        from otx.algorithms.visual_prompting.adapters.torch.models.visual_prompters.sam import SAM
+        return SAM
 
 
-class VisualPrompter(nn.Module):
-    def __init__(self, type: str, *args, **kwargs):
-        super().__init__()
-        self.prompter = self.build_prompter(type)(*args, **kwargs)
-        
-    def build_prompter(self, type: str):
-        if type.lower() == "sam":
-            from otx.algorithms.visual_prompting.adapters.torch.models.visual_prompters.sam import SAM
-            return SAM
+class VisualPrompter:
+    def __new__(cls, type: str, *args, **kwargs):
+        return build_prompter(type)(*args, **kwargs)
