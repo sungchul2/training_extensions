@@ -5,6 +5,7 @@
 #
 
 from collections import defaultdict
+from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import cv2
@@ -24,7 +25,7 @@ class ZeroShotLearningProcessor:
         backbone: str,
         use_attn_sim: bool = False,
         default_threshold_reference: float = 0.3,
-        default_threshold_target: float = 0.6,
+        default_threshold_target: float = 0.65,
         device: str = "cuda"
     ):
         self.model = SAM(backbone=backbone, device=device)
@@ -36,9 +37,9 @@ class ZeroShotLearningProcessor:
         self._initialize_reference()
 
     def _initialize_reference(self) -> None:
-        self.target_feats: List[torch.Tensor] = []
-        self.target_embeddings: List[torch.Tensor] = []
-        self.ref_logit = None
+        self.reference_feats: List[torch.Tensor] = []
+        self.reference_embeddings: List[torch.Tensor] = []
+        self.reference_logit = None
 
     def _generate_ref_feature_mask(self, ref_feat: torch.Tensor, ref_mask: torch.Tensor) -> Tuple[torch.Tensor, ...]:
         """Generate reference features.
@@ -59,12 +60,12 @@ class ZeroShotLearningProcessor:
         ref_mask = F.interpolate(ref_mask.unsqueeze(0).unsqueeze(0), size=ref_feat.shape[0: 2], mode="bilinear").squeeze()
         
         # Target feature extraction
-        target_feat = ref_feat[ref_mask > self.default_threshold_reference]
-        target_embedding = target_feat.mean(0).unsqueeze(0)    
-        target_feat = target_embedding / target_embedding.norm(dim=-1, keepdim=True)
-        target_embedding = target_embedding.unsqueeze(0)
+        reference_feat = ref_feat[ref_mask > self.default_threshold_reference]
+        reference_embedding = reference_feat.mean(0).unsqueeze(0)    
+        reference_feat = reference_embedding / reference_embedding.norm(dim=-1, keepdim=True)
+        reference_embedding = reference_embedding.unsqueeze(0)
         
-        return target_feat, target_embedding
+        return reference_feat, reference_embedding
 
     def _generate_prompt_info(self, test_feat: torch.Tensor, test_image: np.ndarray, topk: int = 0) -> Tuple[List, ...]:
         # Cosine similarity
@@ -72,12 +73,12 @@ class ZeroShotLearningProcessor:
         test_feat = test_feat / test_feat.norm(dim=0, keepdim=True)
         test_feat = test_feat.reshape(C, h * w)
         
-        num_classes = len(self.target_feats)
+        num_classes = len(self.reference_feats)
         # Positive-negative location prior
         topk_xys = []
         topk_labels = []
         attn_sims = []
-        for ref_feat in self.target_feats:
+        for ref_feat in self.reference_feats:
             sim= ref_feat @ test_feat
             sim = sim.reshape(1, 1, h, w)
             sim = self.model.postprocess_masks(
@@ -86,7 +87,7 @@ class ZeroShotLearningProcessor:
                 original_size=self.model.original_size).squeeze()
 
             # threshold = 0.85 * sim.max() if num_classes > 1 else 0.65
-            topk_xy_i, topk_label_i = self._point_selection(sim, test_image, topk=topk, threshold=self.threshold_target)
+            topk_xy_i, topk_label_i = self._point_selection(sim, test_image, topk=topk, threshold=self.default_threshold_target)
             topk_xys.append(topk_xy_i)
             topk_labels.append(topk_label_i)
 
@@ -165,7 +166,7 @@ class ZeroShotLearningProcessor:
         prompt_labels: torch.Tensor,
         attention: Optional[torch.Tensor] = None,
         embedding: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
+    ) -> np.ndarray:
         # First-step prediction
         if attention is not None and embedding is not None:
             masks, scores, logits, _ = self.model.predict(
@@ -173,7 +174,7 @@ class ZeroShotLearningProcessor:
                 point_labels=prompt_labels, 
                 multimask_output=False,
                 attn_sim=attention,  # Target-guided Attention
-                target_embedding=embedding  # Target-semantic Prompting
+                reference_embedding=embedding  # Target-semantic Prompting
             )
         else:
             masks, scores, logits, _ = self.model.predict(
@@ -251,12 +252,6 @@ class ZeroShotLearningProcessor:
                     }
                 }
         """
-        def update_value(target, key, value):
-            if key in target:
-                target[key] = np.concatenate((target[key], value))
-            else:
-                target[key] = value
-
         processed_prompts: Dict[str, Dict[str, Any]] = {}
         for prompt in prompts:
             if prompt.get("label", 0) not in processed_prompts:
@@ -264,8 +259,8 @@ class ZeroShotLearningProcessor:
                 processed_prompts[prompt.get("label", 0)] = defaultdict(dict)
 
             if prompt.get("type") == "point":
-                update_value(processed_prompts[prompt.get("label", 0)], "point_coords", prompt.get("point_coords"))
-                update_value(processed_prompts[prompt.get("label", 0)], "point_labels", prompt.get("point_labels"))
+                self._update_value(processed_prompts[prompt.get("label", 0)], "point_coords", prompt.get("point_coords"))
+                self._update_value(processed_prompts[prompt.get("label", 0)], "point_labels", prompt.get("point_labels"))
 
             elif prompt.get("type") == "polygon":
                 polygon = prompt.get("point_coords")
@@ -279,25 +274,44 @@ class ZeroShotLearningProcessor:
                     ys, xs, _ = np.nonzero(gt_mask)
                 else:
                     ys, xs = polygon[:,1], polygon[:,0]
-                rand_idx = np.random.permutation(len(ys))[:num_sample]
-                point_coords = []
-                point_labels = []
-                for x, y in xs[rand_idx], ys[rand_idx]:
-                    point_coords.append([x, y])
-                    point_labels.append(prompt.get("point_labels")[0])
-                processed_prompts[prompt.get("label", 0)].update({
 
-                })
+                rand_idx = np.random.permutation(len(ys))[:num_sample]
+                _point_coords = []
+                _point_labels = []
+                for x, y in xs[rand_idx], ys[rand_idx]:
+                    _point_coords.append([x, y])
+                    _point_labels.append(prompt.get("point_labels")[0])
+
+                self._update_value(processed_prompts[prompt.get("label", 0)], "point_coords", np.array(_point_coords))
+                self._update_value(processed_prompts[prompt.get("label", 0)], "point_labels", np.array(_point_labels))
 
             elif prompt.get("type") == "box":
-                processed_prompts[prompt.get("label", 0)].update({
-                    "box": prompt.get("point_coords"),
-                })
+                self._update_value(processed_prompts[prompt.get("label", 0)], "box", prompt.get("point_coords"))
+
         processed_prompts = dict(sorted(processed_prompts.items(), key=lambda x: x[0]))
         return processed_prompts
 
-    def _merge_prompts(self):
-        pass
+    def _update_value(self, target, key, value):
+        if key in target:
+            target[key] = np.concatenate((target[key], value))
+        else:
+            target[key] = value
+
+    def _merge_prompts(self, label, input_prompts, processed_prompts, use_only_background: bool = True):
+        merged_input_prompts = deepcopy(input_prompts)
+        for other_label, other_input_prompts in processed_prompts.items():
+            if other_label == label:
+                continue
+            if (use_only_background and other_label == 0) or (not use_only_background):
+                # only add point (and scribble) prompts
+                # use_only_background=True -> background prompts are only added as background
+                # use_only_background=False -> other prompts are added as background
+                if "point_coords" in other_input_prompts:
+                    # point, scribble
+                    self._update_value(merged_input_prompts, "point_coords", other_input_prompts.get("point_coords"))
+                    self._update_value(merged_input_prompts, "point_labels", np.zeros_like(other_input_prompts.get("point_labels")))
+
+        return merged_input_prompts
 
     def _infer_reference_prediction(
         self,
@@ -355,33 +369,39 @@ class ZeroShotLearningProcessor:
 
         height, width, _ = images.shape
         self.model.set_image(images)
-        ref_masks = defaultdict(list)
+        ref_masks = {}
 
         processed_prompts = self._preprocess_prompts(prompts, height, width)
+        results_reference = []
         for label, input_prompts in processed_prompts.items():
             if label == 0:
                 # background
                 continue
 
-            input_prompts.update({"mask_input": self.ref_logit})
-            masks, scores, logits, _ = self.model.predict(**input_prompts, multimask_output=True)
+            merged_input_prompts = self._merge_prompts(label, input_prompts, processed_prompts)
+            merged_input_prompts.update({"mask_input": self.reference_logit})
+            masks, scores, logits, _ = self.model.predict(**merged_input_prompts, multimask_output=True)
             best_idx = np.argmax(scores)
 
             ref_feat = self.model.features.squeeze().permute(1, 2, 0)
             ref_mask = torch.tensor(masks[best_idx], dtype=torch.float32)
-            target_feat, target_embedding = self._generate_ref_feature_mask(ref_feat, ref_mask)
+            reference_feat, reference_embedding = self._generate_ref_feature_mask(ref_feat, ref_mask)
 
-            self.target_feats.append(target_feat)
-            self.target_embeddings.append(target_embedding)
+            self.reference_feats.append(reference_feat)
+            self.reference_embeddings.append(reference_embedding)
 
-            self.ref_logit = logits[best_idx][None] if params.get("use_logit", False) else None
-            ref_masks["results_reference"].append(masks[best_idx])
+            self.reference_logit = logits[best_idx][None] if params.get("use_logit", False) else None
+            results_reference.append(masks[best_idx])
+
+        ref_masks["results_reference"] = np.concatenate((
+            np.zeros((1, height, width)), np.stack(results_reference, axis=0)
+        ), axis=0)
 
         if params.get("do_ref_seg", True):
-            ref_masks["results_target"] += self._infer_target_segmentation([images])[0]
+            ref_masks["results_target"] = self._infer_target_segmentation([images])
         return ref_masks
 
-    def _infer_target_segmentation(self, images: List[np.ndarray]) -> List[List[torch.Tensor]]:
+    def _infer_target_segmentation(self, images: List[np.ndarray]) -> List[List[np.ndarray]]:
         """Referring segmentation to targets using reference features.
         
         Args:
@@ -392,29 +412,27 @@ class ZeroShotLearningProcessor:
             self.model.set_image(image)
             test_feat = self.model.features.squeeze()
             topk_xys, topk_labels, attn_sims = self._generate_prompt_info(test_feat, image)
-            best_masks = []
+            best_masks = np.zeros((1,)+image.shape[:2], dtype=np.float32)
             for i in range(len(topk_xys)):
-                best_mask = None
+                best_mask = np.zeros(image.shape[:2], dtype=np.float32)
                 for j in topk_xys[i].keys():
                     inputs = dict(
                         prompt_points=np.array(topk_xys[i].get(j)),
                         prompt_labels=np.array(topk_labels[i].get(j)),
                     )
-                    if best_mask is not None and best_mask[inputs["prompt_points"][0][1], inputs["prompt_points"][0][0]] > 0:
+                    if best_mask[inputs["prompt_points"][0][1], inputs["prompt_points"][0][0]] > 0:
                         # if given prompt value in best_mask is already assigned
                         continue
 
                     if self.use_attn_sim:
                         inputs.update(dict(
                             attention=attn_sims[i],
-                            embedding=self.target_embeddings[i],
+                            embedding=self.reference_embeddings[i],
                         ))
                     mask = self._predict_mask(**inputs)
-                    if best_mask is None:
-                        best_mask = mask
-                    else:
-                        best_mask += mask
-                best_masks.append(best_mask)
+                    best_mask += mask
+                best_mask = np.clip(best_mask, 0, 1)
+                best_masks = np.concatenate((best_masks, best_mask[None]), axis=0)
             total_best_masks.append(best_masks)
         return total_best_masks
 
