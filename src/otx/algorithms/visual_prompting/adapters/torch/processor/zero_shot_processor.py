@@ -19,7 +19,15 @@ from otx.algorithms.visual_prompting.adapters.torch.models.visual_prompters impo
 
 
 class ZeroShotLearningProcessor:
-    """Processor for SAM zero-shot learning."""
+    """Processor for SAM zero-shot learning.
+    
+    Args:
+        backbone (str): Backbone network to be used between tiny_vit, vit_b, vit_l, and vit_h.
+        use_attn_sim (bool): Whether using attention similarity used at PerSAM, defaults to False.
+        default_threshold_reference (float): Threshold used for reference features, defaults to 0.3.
+        default_threshold_target (float): Threshold used for target point selection, defaults to 0.65.
+        device (str): Device setting, defaults to cuda.
+    """
     def __init__(
         self,
         backbone: str,
@@ -27,7 +35,7 @@ class ZeroShotLearningProcessor:
         default_threshold_reference: float = 0.3,
         default_threshold_target: float = 0.65,
         device: str = "cuda"
-    ):
+    ) -> None:
         self.model = VisualPrompter(type="sam", backbone=backbone, device=device)
         self.use_attn_sim = use_attn_sim
         self.default_threshold_reference = default_threshold_reference  # immutable
@@ -37,6 +45,7 @@ class ZeroShotLearningProcessor:
         self._initialize_reference()
 
     def _initialize_reference(self) -> None:
+        """Initialize reference information."""
         self.reference_feats: List[torch.Tensor] = []
         self.reference_embeddings: List[torch.Tensor] = []
         self.reference_logit = None
@@ -47,12 +56,12 @@ class ZeroShotLearningProcessor:
         It should be run whenever the masks are predicted to get reference features corresponding to the masks.
         
         Args:
-            ref_feat (torch.Tensor):
-            ref_mask (torch.Tensor):
+            ref_feat (torch.Tensor): Raw reference features. It will be filtered with ref_mask.
+            ref_mask (torch.Tensor): Reference masks used to filter features.
 
         Returns:
-            (torch.Tensor): 
-            (torch.Tensor):
+            (torch.Tensor): Filtered reference features.
+            (torch.Tensor): Reference embeddings used for target-semantic Prompting.
         """
         # Post-process ref_mask
         ref_mask = F.interpolate(ref_mask.unsqueeze(0).unsqueeze(0), size=self.model.input_size, mode="bilinear").squeeze()
@@ -68,6 +77,7 @@ class ZeroShotLearningProcessor:
         return reference_feat, reference_embedding
 
     def _generate_prompt_info(self, test_feat: torch.Tensor, test_image: np.ndarray, topk: int = 0) -> Tuple[List, ...]:
+        """Generate points, labels, and attention similarity which can be used for zero-shot inference."""
         # Cosine similarity
         C, h, w = test_feat.shape
         test_feat = test_feat / test_feat.norm(dim=0, keepdim=True)
@@ -107,6 +117,7 @@ class ZeroShotLearningProcessor:
         topk: int = 1,
         threshold: float = 0.8
     ) -> Tuple[Dict, ...]:
+        """Select point used as point prompts."""
         # Top-1 point selection
         h, w = mask_sim.shape
         topk_xy = {}
@@ -167,6 +178,16 @@ class ZeroShotLearningProcessor:
         attention: Optional[torch.Tensor] = None,
         embedding: Optional[torch.Tensor] = None
     ) -> np.ndarray:
+        """Predict target masks.
+        
+        Args:
+            prompt_points (torch.Tensor): Selected points as point prompts from similarity map.
+            prompt_labels (torch.Tensor): Labels that are set in foreground or background.
+            attention (torch.Tensor, optional): Target-guided attention used at PerSAM.
+            embedding (torch.Tensor, optional): Target-semantic Prompting used at PerSAM.
+        Return:
+            (np.ndarray): Predicted mask.
+        """
         # First-step prediction
         if attention is not None and embedding is not None:
             masks, scores, logits, _ = self.model.predict(
@@ -291,13 +312,24 @@ class ZeroShotLearningProcessor:
         processed_prompts = dict(sorted(processed_prompts.items(), key=lambda x: x[0]))
         return processed_prompts
 
-    def _update_value(self, target, key, value):
+    def _update_value(self, target: Dict[str, Any], key: str, value: np.ndarray) -> None:
+        """Update numpy value to target dictionary."""
         if key in target:
             target[key] = np.concatenate((target[key], value))
         else:
             target[key] = value
 
-    def _merge_prompts(self, label, input_prompts, processed_prompts, use_only_background: bool = True):
+    def _merge_prompts(self, label: int, input_prompts: Dict[str, Any], processed_prompts: Dict[str, Any], use_only_background: bool = True) -> Dict[str, Any]:
+        """Merge target prompt and other prompts.
+
+        Merge a foreground prompt and other prompts (background or prompts with other classes).
+        
+        Args:
+            label (int): Label information. Background is 0 and other foregrounds are >= 0.
+            input_prompts (dict): A foreground prompt to be merged with other prompts.
+            processed_prompts (dict): The whole class-wise prompts processed at _preprocess_prompts.
+            use_only_background (bool): Whether merging only background prompt, defaults to True. It is applied to only point_coords.
+        """
         merged_input_prompts = deepcopy(input_prompts)
         for other_label, other_input_prompts in processed_prompts.items():
             if other_label == label:
@@ -354,7 +386,7 @@ class ZeroShotLearningProcessor:
                 ]
 
         Returns:
-            (np.ndarray): 
+            (dict): Base visual prompting results.
         """
         height, width, _ = images.shape
         self.model.set_image(images)
@@ -462,11 +494,14 @@ class ZeroShotLearningProcessor:
             ref_masks["results_target"] = self._infer_target_segmentation([images])
         return ref_masks
 
-    def _infer_target_segmentation(self, images: List[np.ndarray]) -> List[List[np.ndarray]]:
+    def _infer_target_segmentation(self, images: List[np.ndarray]) -> List[np.ndarray]:
         """Referring segmentation to targets using reference features.
         
         Args:
-            images (list):
+            images (list): List of target images.
+
+        Returns:
+            (list): List of results of each target image. Each result is a mask with CxHxW shape.
         """
         total_best_masks = []
         for image in images:
