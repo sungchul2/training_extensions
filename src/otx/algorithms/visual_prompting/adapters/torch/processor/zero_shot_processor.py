@@ -278,7 +278,7 @@ class ZeroShotLearningProcessor:
                 rand_idx = np.random.permutation(len(ys))[:num_sample]
                 _point_coords = []
                 _point_labels = []
-                for x, y in xs[rand_idx], ys[rand_idx]:
+                for x, y in zip(xs[rand_idx], ys[rand_idx]):
                     _point_coords.append([x, y])
                     _point_labels.append(prompt.get("point_labels")[0])
 
