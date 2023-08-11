@@ -15,7 +15,7 @@ from PIL import Image
 from sklearn.utils import shuffle
 from torch.nn import functional as F
 
-from otx.algorithms.visual_prompting.adapters.torch.models.visual_prompters import SAM
+from otx.algorithms.visual_prompting.adapters.torch.models.visual_prompters import VisualPrompter
 
 
 class ZeroShotLearningProcessor:
@@ -28,7 +28,7 @@ class ZeroShotLearningProcessor:
         default_threshold_target: float = 0.65,
         device: str = "cuda"
     ):
-        self.model = SAM(backbone=backbone, device=device)
+        self.model = VisualPrompter(type="sam", backbone=backbone, device=device)
         self.use_attn_sim = use_attn_sim
         self.default_threshold_reference = default_threshold_reference  # immutable
         self.default_threshold_target = default_threshold_target
@@ -55,8 +55,8 @@ class ZeroShotLearningProcessor:
             (torch.Tensor):
         """
         # Post-process ref_mask
-        ref_mask = F.interpolate(ref_mask.unsqueeze(0).unsqueeze(0), size=self.model.input_size, mode="bilinear").squeeze()
-        ref_mask = self.model.preprocess_mask(ref_mask)
+        ref_mask = F.interpolate(ref_mask.unsqueeze(0).unsqueeze(0), size=self.model.prompter.input_size, mode="bilinear").squeeze()
+        ref_mask = self.model.prompter.preprocess_mask(ref_mask)
         ref_mask = F.interpolate(ref_mask.unsqueeze(0).unsqueeze(0), size=ref_feat.shape[0: 2], mode="bilinear").squeeze()
         
         # Target feature extraction
@@ -81,10 +81,10 @@ class ZeroShotLearningProcessor:
         for ref_feat in self.reference_feats:
             sim= ref_feat @ test_feat
             sim = sim.reshape(1, 1, h, w)
-            sim = self.model.postprocess_masks(
+            sim = self.model.prompter.postprocess_masks(
                 sim,
-                input_size=self.model.input_size,
-                original_size=self.model.original_size).squeeze()
+                input_size=self.model.prompter.input_size,
+                original_size=self.model.prompter.original_size).squeeze()
 
             # threshold = 0.85 * sim.max() if num_classes > 1 else 0.65
             topk_xy_i, topk_label_i = self._point_selection(sim, test_image, topk=topk, threshold=self.default_threshold_target)
@@ -139,7 +139,7 @@ class ZeroShotLearningProcessor:
             if max_len < w:
                 max_len = w
 
-            ratio = self.model.image_size / max_len
+            ratio = self.model.prompter.image_size / max_len
             h = int(h * ratio)
             w = int(w * ratio)
             n_w = w // 16
@@ -169,7 +169,7 @@ class ZeroShotLearningProcessor:
     ) -> np.ndarray:
         # First-step prediction
         if attention is not None and embedding is not None:
-            masks, scores, logits, _ = self.model.predict(
+            masks, scores, logits, _ = self.model.prompter.predict(
                 point_coords=prompt_points, 
                 point_labels=prompt_labels, 
                 multimask_output=False,
@@ -177,7 +177,7 @@ class ZeroShotLearningProcessor:
                 reference_embedding=embedding  # Target-semantic Prompting
             )
         else:
-            masks, scores, logits, _ = self.model.predict(
+            masks, scores, logits, _ = self.model.prompter.predict(
                 point_coords=prompt_points, 
                 point_labels=prompt_labels, 
                 multimask_output=False
@@ -185,7 +185,7 @@ class ZeroShotLearningProcessor:
         best_idx = 0
 
         # Cascaded Post-refinement-1
-        masks, scores, logits, _ = self.model.predict(
+        masks, scores, logits, _ = self.model.prompter.predict(
                     point_coords=prompt_points,
                     point_labels=prompt_labels,
                     mask_input=logits[best_idx: best_idx + 1, :, :], 
@@ -199,7 +199,7 @@ class ZeroShotLearningProcessor:
         y_min = y.min()
         y_max = y.max()
         input_box = np.array([x_min, y_min, x_max, y_max])
-        masks, scores, logits, _ = self.model.predict(
+        masks, scores, logits, _ = self.model.prompter.predict(
             point_coords=prompt_points,
             point_labels=prompt_labels,
             box=input_box[None, :],
@@ -368,7 +368,7 @@ class ZeroShotLearningProcessor:
             self._initialize_reference()
 
         height, width, _ = images.shape
-        self.model.set_image(images)
+        self.model.prompter.set_image(images)
         ref_masks = {}
 
         processed_prompts = self._preprocess_prompts(prompts, height, width)
@@ -380,10 +380,10 @@ class ZeroShotLearningProcessor:
 
             merged_input_prompts = self._merge_prompts(label, input_prompts, processed_prompts)
             merged_input_prompts.update({"mask_input": self.reference_logit})
-            masks, scores, logits, _ = self.model.predict(**merged_input_prompts, multimask_output=True)
+            masks, scores, logits, _ = self.model.prompter.predict(**merged_input_prompts, multimask_output=True)
             best_idx = np.argmax(scores)
 
-            ref_feat = self.model.features.squeeze().permute(1, 2, 0)
+            ref_feat = self.model.prompter.features.squeeze().permute(1, 2, 0)
             ref_mask = torch.tensor(masks[best_idx], dtype=torch.float32)
             reference_feat, reference_embedding = self._generate_ref_feature_mask(ref_feat, ref_mask)
 
@@ -409,8 +409,8 @@ class ZeroShotLearningProcessor:
         """
         total_best_masks = []
         for image in images:
-            self.model.set_image(image)
-            test_feat = self.model.features.squeeze()
+            self.model.prompter.set_image(image)
+            test_feat = self.model.prompter.features.squeeze()
             topk_xys, topk_labels, attn_sims = self._generate_prompt_info(test_feat, image)
             best_masks = np.zeros((1,)+image.shape[:2], dtype=np.float32)
             for i in range(len(topk_xys)):
