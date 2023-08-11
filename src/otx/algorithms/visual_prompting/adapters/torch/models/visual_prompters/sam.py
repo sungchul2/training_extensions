@@ -29,7 +29,7 @@ from otx.algorithms.visual_prompting.adapters.torch.models.encoders import (
 class SAM(nn.Module):
     """Segment Anything Model for zero-shot inference."""
     CKPT_PATHS = {
-        "tiny_vit": "https://github.com/ChaoningZhang/MobileSAM/blob/master/weights/mobile_sam.pt",
+        "tiny_vit": "https://github.com/ChaoningZhang/MobileSAM/raw/master/weights/mobile_sam.pt",
         "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
         "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
         "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
