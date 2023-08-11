@@ -89,7 +89,7 @@ class ZeroShotLearningProcessor:
         topk_labels = []
         attn_sims = []
         for ref_feat in self.reference_feats:
-            sim= ref_feat @ test_feat
+            sim = ref_feat @ test_feat
             sim = sim.reshape(1, 1, h, w)
             sim = self.model.postprocess_masks(
                 sim,
@@ -185,6 +185,7 @@ class ZeroShotLearningProcessor:
             prompt_labels (torch.Tensor): Labels that are set in foreground or background.
             attention (torch.Tensor, optional): Target-guided attention used at PerSAM.
             embedding (torch.Tensor, optional): Target-semantic Prompting used at PerSAM.
+
         Return:
             (np.ndarray): Predicted mask.
         """
