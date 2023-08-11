@@ -357,13 +357,13 @@ class ZeroShotLearningProcessor:
                 ]
 
             params (dict): Parameters for reference prediction.
-                - reset_feat : Reset reference features using a new given image and prompts, defaults to True.
-                - do_ref_seg : Referring segmentation to targets using the source image will be executed, defaults to True.
+                - reset_feat : Reset reference features using a new given image and prompts, defaults to False.
+                - do_ref_seg : Referring segmentation to targets using the source image will be executed, defaults to False.
 
         Returns:
             (dict): Reference prediction results.
         """
-        if params.get("reset_feat", True):
+        if params.get("reset_feat", False):
             print(f"[*] Reinitialize reference image & feature.")
             self._initialize_reference()
 
@@ -397,7 +397,7 @@ class ZeroShotLearningProcessor:
             np.zeros((1, height, width)), np.stack(results_reference, axis=0)
         ), axis=0)
 
-        if params.get("do_ref_seg", True):
+        if params.get("do_ref_seg", False):
             ref_masks["results_target"] = self._infer_target_segmentation([images])
         return ref_masks
 
