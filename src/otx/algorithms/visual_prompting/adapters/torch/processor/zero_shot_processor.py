@@ -82,45 +82,75 @@ class ZeroShotLearningProcessor:
     def _generate_prompt_info(self, target_feat: torch.Tensor, target_image: np.ndarray, topk: int = 0) -> Tuple[List, ...]:
         """Generate points, labels, and attention similarity which can be used for zero-shot inference."""
         # Cosine similarity
-        C, h, w = target_feat.shape
+        c_feat, h_feat, w_feat = target_feat.shape
+        h_img, w_img, _ = target_image.shape
         target_feat = target_feat / target_feat.norm(dim=0, keepdim=True)
-        target_feat = target_feat.reshape(C, h * w)
+        target_feat = target_feat.reshape(c_feat, h_feat * w_feat)
         
         num_classes = len(self.reference_feats)
         # Positive-negative location prior
-        topk_xys = []
-        topk_labels = []
-        attn_sims = []
-        for ref_feat in self.reference_feats:
+        predicted_masks = np.zeros((num_classes, h_img, w_img), dtype=np.float32)
+        for i, ref_feat in enumerate(self.reference_feats):
             sim = ref_feat @ target_feat
-            sim = sim.reshape(1, 1, h, w)
+            sim = sim.reshape(1, 1, h_feat, w_feat)
             sim = self.model.postprocess_masks(
                 sim,
                 input_size=self.model.input_size,
                 original_size=self.model.original_size).squeeze()
 
             # threshold = 0.85 * sim.max() if num_classes > 1 else 0.65
-            topk_xy_i, topk_label_i = self._point_selection(sim, target_image, topk=topk, threshold=self.default_threshold_target)
-            topk_xys.append(topk_xy_i)
-            topk_labels.append(topk_label_i)
+            topk_points, topk_labels = self._point_selection(sim, h_img, w_img, topk=topk, threshold=self.default_threshold_target)
+            best_mask: np.ndarray = np.zeros((h_img, w_img), dtype=np.float32)
+            for j in topk_points.keys():
+                prompt_points: List = []
+                prompt_labels: List = []
+                flag_fg: bool = False
+                for point, label in zip(topk_points.get(j), topk_labels.get(j)):
+                    if label == 1 and best_mask[point[1], point[0]] > 0:
+                    # Filter already assigned foreground prompts
+                        continue
 
-            if self.use_attn_sim:
-                # Obtain the target guidance for cross-attention layers
-                sim = (sim - sim.mean()) / torch.std(sim)
-                sim = F.interpolate(sim.unsqueeze(0).unsqueeze(0), size=(h, w), mode="bilinear")
-                attn_sim = sim.sigmoid_().unsqueeze(0).flatten(3)
-                attn_sims.append(attn_sim)
+                    prompt_points.append(point)
+                    prompt_labels.append(label)
+                    if label == 1:
+                        flag_fg = True
 
-        return topk_xys, topk_labels, attn_sims
+                if not flag_fg:
+                    # Skip if not using foreground prompts
+                    continue
+
+                inputs = {
+                    "prompt_points": np.array(prompt_points),
+                    "prompt_labels": np.array(prompt_labels),
+                }
+                if self.use_attn_sim:
+                    # Obtain the target guidance for cross-attention layers
+                    attn_sim = (sim - sim.mean()) / sim.std()
+                    attn_sim = F.interpolate(attn_sim.unsqueeze(0).unsqueeze(0), size=(h_feat, w_feat), mode="bilinear")
+                    attn_sim = attn_sim.sigmoid_().unsqueeze(0).flatten(3)
+                    inputs.update(dict(
+                        attention=attn_sim,
+                        embedding=self.reference_embeddings[i],
+                    ))
+
+                mask = self._predict_mask(**inputs)
+                # TODO (sungchul): return similarity score
+                predicted_masks[i][mask] += mask
+            predicted_masks[i] = np.clip(predicted_masks[i], 0, 1)
+
+        return predicted_masks
 
     def _point_selection(
         self,
         mask_sim: torch.Tensor,
-        target_image: np.ndarray,
+        height: int,
+        width: int,
         topk: int = 1,
         threshold: float = 0.8
     ) -> Tuple[Dict, ...]:
         """Select point used as point prompts."""
+        # TODO (sungchul): refactoring
+
         # Top-1 point selection
         h, w = mask_sim.shape
         topk_xy = {}
@@ -144,19 +174,19 @@ class ZeroShotLearningProcessor:
             topk_label[0].append(0)
 
         else:
+            # TODO (sungchul): sort coords by similarity score like top-k, not shuffling
             sim_points = (mask_sim >= threshold)
             np_xy = torch.nonzero(sim_points*mask_sim)
             np_xy = shuffle(np_xy.cpu().detach().numpy(), random_state=0)
 
-            h, w, _ = target_image.shape
-            max_len = h
-            if max_len < w:
-                max_len = w
+            max_len = height
+            if max_len < width:
+                max_len = width
 
             ratio = self.model.image_size / max_len
-            h = int(h * ratio)
-            w = int(w * ratio)
-            n_w = w // 16
+            height = int(height * ratio)
+            width = int(width * ratio)
+            n_w = width // 16
             for i in range(len(np_xy)):
                 x = np_xy[i][1]
                 y = np_xy[i][0]
@@ -543,29 +573,7 @@ class ZeroShotLearningProcessor:
             if mode == "auto_generation":
                 predicted_masks = self._auto_generation_feature_matching(image)
             elif mode == "clustering":
-                topk_xys, topk_labels, attn_sims = self._generate_prompt_info(target_feat, image)
-                # TODO (sungchul): move the below process into _generate_prompt_info (to be renamed)
-                predicted_masks = np.zeros((1,)+image.shape[:2], dtype=np.float32)
-                for i in range(len(topk_xys)):
-                    best_mask = np.zeros(image.shape[:2], dtype=np.float32)
-                    for j in topk_xys[i].keys():
-                        inputs = dict(
-                            prompt_points=np.array(topk_xys[i].get(j)),
-                            prompt_labels=np.array(topk_labels[i].get(j)),
-                        )
-                        if best_mask[inputs["prompt_points"][0][1], inputs["prompt_points"][0][0]] > 0:
-                            # if given prompt value in best_mask is already assigned
-                            continue
-
-                        if self.use_attn_sim:
-                            inputs.update(dict(
-                                attention=attn_sims[i],
-                                embedding=self.reference_embeddings[i],
-                            ))
-                        mask = self._predict_mask(**inputs)
-                        best_mask += mask
-                    best_mask = np.clip(best_mask, 0, 1)
-                    predicted_masks = np.concatenate((predicted_masks, best_mask[None]), axis=0)
+                predicted_masks = self._generate_prompt_info(target_feat, image)
             else:
                 continue
             total_predicted_masks.append(predicted_masks)
