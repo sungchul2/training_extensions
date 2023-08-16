@@ -563,14 +563,14 @@ class ZeroShotLearningProcessor:
         Returns:
             (list): List of results of each target image. Each result is a mask with CxHxW shape.
         """
-        mode = params.get("mode", "auto_generation")
+        mode = params.get("mode", "point_selection")
         total_predicted_masks = []
         for image in images:
             self.model.set_image(image)
             target_feat = self.model.features.squeeze()
             if mode == "auto_generation":
                 predicted_masks = self._auto_generation_feature_matching(image)
-            elif mode == "clustering":
+            elif mode == "point_selection":
                 predicted_masks = self._point_selection_feature_matching(target_feat, image)
             else:
                 continue
