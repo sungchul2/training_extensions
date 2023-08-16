@@ -50,38 +50,41 @@ class ZeroShotLearningProcessor:
         self.reference_embeddings: List[torch.Tensor] = []
         self.reference_logit = None
 
-    def _generate_ref_feature_mask(self, ref_feat: torch.Tensor, ref_mask: torch.Tensor) -> Tuple[torch.Tensor, ...]:
-        """Generate reference features.
-
-        It should be run whenever the masks are predicted to get reference features corresponding to the masks.
+    def _generate_masked_features(self, feats: torch.Tensor, masks: torch.Tensor, threshold_mask: float) -> Tuple[torch.Tensor, ...]:
+        """Generate masked features.
         
         Args:
-            ref_feat (torch.Tensor): Raw reference features. It will be filtered with ref_mask.
-            ref_mask (torch.Tensor): Reference masks used to filter features.
+            feats (torch.Tensor): Raw reference features. It will be filtered with masks.
+            masks (torch.Tensor): Reference masks used to filter features.
+            threshold_mask (float): Threshold to control masked region.
 
         Returns:
-            (torch.Tensor): Filtered reference features.
-            (torch.Tensor): Reference embeddings used for target-semantic Prompting.
+            (torch.Tensor): Masked features.
+            (torch.Tensor): Masked embeddings used for semantic prompting.
         """
-        # Post-process ref_mask
-        ref_mask = F.interpolate(ref_mask.unsqueeze(0).unsqueeze(0), size=self.model.input_size, mode="bilinear").squeeze()
-        ref_mask = self.model.preprocess_mask(ref_mask)
-        ref_mask = F.interpolate(ref_mask.unsqueeze(0).unsqueeze(0), size=ref_feat.shape[0: 2], mode="bilinear").squeeze()
+        # Post-process masks
+        masks = F.interpolate(masks.unsqueeze(0).unsqueeze(0), size=self.model.input_size, mode="bilinear").squeeze()
+        masks = self.model.preprocess_mask(masks)
+        masks = F.interpolate(masks.unsqueeze(0).unsqueeze(0), size=feats.shape[0: 2], mode="bilinear").squeeze()
         
         # Target feature extraction
-        reference_feat = ref_feat[ref_mask > self.default_threshold_reference]
-        reference_embedding = reference_feat.mean(0).unsqueeze(0)    
-        reference_feat = reference_embedding / reference_embedding.norm(dim=-1, keepdim=True)
-        reference_embedding = reference_embedding.unsqueeze(0)
-        
-        return reference_feat, reference_embedding
+        if (masks > threshold_mask).sum() == 0:
+            # (for stability) there is no area to be extracted
+            return None, None
 
-    def _generate_prompt_info(self, test_feat: torch.Tensor, test_image: np.ndarray, topk: int = 0) -> Tuple[List, ...]:
+        masked_feat = feats[masks > threshold_mask]
+        masked_embedding = masked_feat.mean(0).unsqueeze(0)    
+        masked_feat = masked_embedding / masked_embedding.norm(dim=-1, keepdim=True)
+        masked_embedding = masked_embedding.unsqueeze(0)
+        
+        return masked_feat, masked_embedding
+
+    def _generate_prompt_info(self, target_feat: torch.Tensor, target_image: np.ndarray, topk: int = 0) -> Tuple[List, ...]:
         """Generate points, labels, and attention similarity which can be used for zero-shot inference."""
         # Cosine similarity
-        C, h, w = test_feat.shape
-        test_feat = test_feat / test_feat.norm(dim=0, keepdim=True)
-        test_feat = test_feat.reshape(C, h * w)
+        C, h, w = target_feat.shape
+        target_feat = target_feat / target_feat.norm(dim=0, keepdim=True)
+        target_feat = target_feat.reshape(C, h * w)
         
         num_classes = len(self.reference_feats)
         # Positive-negative location prior
@@ -89,7 +92,7 @@ class ZeroShotLearningProcessor:
         topk_labels = []
         attn_sims = []
         for ref_feat in self.reference_feats:
-            sim = ref_feat @ test_feat
+            sim = ref_feat @ target_feat
             sim = sim.reshape(1, 1, h, w)
             sim = self.model.postprocess_masks(
                 sim,
@@ -97,7 +100,7 @@ class ZeroShotLearningProcessor:
                 original_size=self.model.original_size).squeeze()
 
             # threshold = 0.85 * sim.max() if num_classes > 1 else 0.65
-            topk_xy_i, topk_label_i = self._point_selection(sim, test_image, topk=topk, threshold=self.default_threshold_target)
+            topk_xy_i, topk_label_i = self._point_selection(sim, target_image, topk=topk, threshold=self.default_threshold_target)
             topk_xys.append(topk_xy_i)
             topk_labels.append(topk_label_i)
 
@@ -113,7 +116,7 @@ class ZeroShotLearningProcessor:
     def _point_selection(
         self,
         mask_sim: torch.Tensor,
-        test_image: np.ndarray,
+        target_image: np.ndarray,
         topk: int = 1,
         threshold: float = 0.8
     ) -> Tuple[Dict, ...]:
@@ -145,7 +148,7 @@ class ZeroShotLearningProcessor:
             np_xy = torch.nonzero(sim_points*mask_sim)
             np_xy = shuffle(np_xy.cpu().detach().numpy(), random_state=0)
 
-            h, w, _ = test_image.shape
+            h, w, _ = target_image.shape
             max_len = h
             if max_len < w:
                 max_len = w
@@ -231,6 +234,32 @@ class ZeroShotLearningProcessor:
         best_idx = np.argmax(scores)
         
         return masks[best_idx]
+
+    def _auto_generation_feature_matching(self, image: np.ndarray) -> np.ndarray:
+        """Predict target masks using auto generation.
+        
+        Args:
+            image (np.ndarray): Target image.
+            
+        Returns:
+            (np.ndarray): Predicted mask along with similarity score.
+        """
+        num_classes = len(self.reference_feats)
+        auto_gen_masks = self.model.auto_generator.generate(image)
+        predicted_masks = np.zeros((num_classes,) + image.shape[:2], dtype=np.float32)
+
+        target_feat = self.model.features.squeeze().permute(1, 2, 0)
+        for i, ref_feat in enumerate(self.reference_feats):
+            for auto_gen_mask in auto_gen_masks:
+                target_mask = torch.tensor(auto_gen_mask["segmentation"], dtype=torch.float32)
+                masked_target_feat, _ = self._generate_masked_features(target_feat, target_mask, 0.5)
+                if masked_target_feat is None:
+                    continue
+
+                masked_target_feat = masked_target_feat.permute(1, 0)
+                sim = (ref_feat @ masked_target_feat).detach().cpu().numpy()[0,0]
+                predicted_masks[i][auto_gen_mask["segmentation"]] = sim
+        return predicted_masks
 
     def _preprocess_prompts(
         self,
@@ -479,7 +508,9 @@ class ZeroShotLearningProcessor:
 
             ref_feat = self.model.features.squeeze().permute(1, 2, 0)
             ref_mask = torch.tensor(masks[best_idx], dtype=torch.float32)
-            reference_feat, reference_embedding = self._generate_ref_feature_mask(ref_feat, ref_mask)
+            reference_feat, reference_embedding = self._generate_masked_features(ref_feat, ref_mask, self.default_threshold_reference)
+            if reference_feat is None:
+                continue
 
             self.reference_feats.append(reference_feat)
             self.reference_embeddings.append(reference_embedding)
@@ -492,10 +523,10 @@ class ZeroShotLearningProcessor:
         ), axis=0)
 
         if params.get("do_ref_seg", False):
-            ref_masks["results_target"] = self._infer_target_segmentation([images])
+            ref_masks["results_target"] = self._infer_target_segmentation([images], params)
         return ref_masks
 
-    def _infer_target_segmentation(self, images: List[np.ndarray]) -> List[np.ndarray]:
+    def _infer_target_segmentation(self, images: List[np.ndarray], params: Dict[str, Any]) -> List[np.ndarray]:
         """Referring segmentation to targets using reference features.
         
         Args:
@@ -504,34 +535,41 @@ class ZeroShotLearningProcessor:
         Returns:
             (list): List of results of each target image. Each result is a mask with CxHxW shape.
         """
-        total_best_masks = []
+        mode = params.get("mode", "auto_generation")
+        total_predicted_masks = []
         for image in images:
             self.model.set_image(image)
-            test_feat = self.model.features.squeeze()
-            topk_xys, topk_labels, attn_sims = self._generate_prompt_info(test_feat, image)
-            best_masks = np.zeros((1,)+image.shape[:2], dtype=np.float32)
-            for i in range(len(topk_xys)):
-                best_mask = np.zeros(image.shape[:2], dtype=np.float32)
-                for j in topk_xys[i].keys():
-                    inputs = dict(
-                        prompt_points=np.array(topk_xys[i].get(j)),
-                        prompt_labels=np.array(topk_labels[i].get(j)),
-                    )
-                    if best_mask[inputs["prompt_points"][0][1], inputs["prompt_points"][0][0]] > 0:
-                        # if given prompt value in best_mask is already assigned
-                        continue
+            target_feat = self.model.features.squeeze()
+            if mode == "auto_generation":
+                predicted_masks = self._auto_generation_feature_matching(image)
+            elif mode == "clustering":
+                topk_xys, topk_labels, attn_sims = self._generate_prompt_info(target_feat, image)
+                # TODO (sungchul): move the below process into _generate_prompt_info (to be renamed)
+                predicted_masks = np.zeros((1,)+image.shape[:2], dtype=np.float32)
+                for i in range(len(topk_xys)):
+                    best_mask = np.zeros(image.shape[:2], dtype=np.float32)
+                    for j in topk_xys[i].keys():
+                        inputs = dict(
+                            prompt_points=np.array(topk_xys[i].get(j)),
+                            prompt_labels=np.array(topk_labels[i].get(j)),
+                        )
+                        if best_mask[inputs["prompt_points"][0][1], inputs["prompt_points"][0][0]] > 0:
+                            # if given prompt value in best_mask is already assigned
+                            continue
 
-                    if self.use_attn_sim:
-                        inputs.update(dict(
-                            attention=attn_sims[i],
-                            embedding=self.reference_embeddings[i],
-                        ))
-                    mask = self._predict_mask(**inputs)
-                    best_mask += mask
-                best_mask = np.clip(best_mask, 0, 1)
-                best_masks = np.concatenate((best_masks, best_mask[None]), axis=0)
-            total_best_masks.append(best_masks)
-        return total_best_masks
+                        if self.use_attn_sim:
+                            inputs.update(dict(
+                                attention=attn_sims[i],
+                                embedding=self.reference_embeddings[i],
+                            ))
+                        mask = self._predict_mask(**inputs)
+                        best_mask += mask
+                    best_mask = np.clip(best_mask, 0, 1)
+                    predicted_masks = np.concatenate((predicted_masks, best_mask[None]), axis=0)
+            else:
+                continue
+            total_predicted_masks.append(predicted_masks)
+        return total_predicted_masks
 
     def infer(self, images: Union[List[Any], np.ndarray, Image.Image], params: Dict[str, Any], prompts: Optional[Dict[str, Any]] = None) -> Any:
         """Inference for zero-shot learning using PerSAM inference logic.
@@ -563,4 +601,4 @@ class ZeroShotLearningProcessor:
             assert any(isinstance(image, (np.ndarray, Image.Image)) for image in images), f"images must be set of np.ndarray or Image.Image."
             if any(not isinstance(image, np.ndarray) for image in images):
                 images = [np.array(image) for image in images]
-            return self._infer_target_segmentation(images)
+            return self._infer_target_segmentation(images, params)
