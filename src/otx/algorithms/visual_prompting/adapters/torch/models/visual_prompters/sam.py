@@ -631,8 +631,6 @@ class SamAutomaticMaskGenerator:
         crop_layer_idx: int,
         orig_size: Tuple[int, ...],
     ) -> MaskData:
-        self.model.reset_image()
-
         # Crop the image and calculate embeddings
         x0, y0, x1, y1 = crop_box
         cropped_im = image[y0:y1, x0:x1, :]
@@ -649,7 +647,7 @@ class SamAutomaticMaskGenerator:
             batch_data = self._process_batch(points, cropped_im_size, crop_box, orig_size)
             data.cat(batch_data)
             del batch_data
-        # self.model.reset_image()
+        self.model.reset_image()
 
         # Remove duplicates within this crop.
         keep_by_nms = batched_nms(
