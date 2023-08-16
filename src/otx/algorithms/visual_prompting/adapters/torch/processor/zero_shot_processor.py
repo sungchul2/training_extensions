@@ -263,10 +263,11 @@ class ZeroShotLearningProcessor:
         
         return masks[best_idx]
 
-    def _auto_generation_feature_matching(self, image: np.ndarray) -> np.ndarray:
+    def _auto_generation_feature_matching(self, target_feat: torch.Tensor, image: np.ndarray) -> np.ndarray:
         """Predict target masks using auto generation.
         
         Args:
+            target_feat (torch.Tensor): Target feature.
             image (np.ndarray): Target image.
             
         Returns:
@@ -276,7 +277,6 @@ class ZeroShotLearningProcessor:
         auto_gen_masks = self.model.auto_generator.generate(image)
         predicted_masks = np.zeros((num_classes,) + image.shape[:2], dtype=np.float32)
 
-        target_feat = self.model.features.squeeze().permute(1, 2, 0)
         for i, ref_feat in enumerate(self.reference_feats):
             for auto_gen_mask in auto_gen_masks:
                 target_mask = torch.tensor(auto_gen_mask["segmentation"], dtype=torch.float32)
@@ -569,7 +569,7 @@ class ZeroShotLearningProcessor:
             self.model.set_image(image)
             target_feat = self.model.features.squeeze()
             if mode == "auto_generation":
-                predicted_masks = self._auto_generation_feature_matching(image)
+                predicted_masks = self._auto_generation_feature_matching(target_feat.permute(1, 2, 0), image)
             elif mode == "point_selection":
                 predicted_masks = self._point_selection_feature_matching(target_feat, image)
             else:
