@@ -54,7 +54,7 @@ class ZeroShotLearningProcessor:
     ) -> None:
         self.model = VisualPrompter(type="sam", backbone=backbone, device=device)
         self.use_attn_sim = use_attn_sim
-        self.default_threshold_reference = default_threshold_reference  # immutable
+        self.default_threshold_reference = default_threshold_reference
         self.default_threshold_target = default_threshold_target
         self.threshold_target: float
         
@@ -123,8 +123,8 @@ class ZeroShotLearningProcessor:
                 input_size=self.model.input_size,
                 original_size=self.model.original_size).squeeze()
 
-            # threshold = 0.85 * sim.max() if num_classes > 1 else 0.65
-            topk_points, topk_labels = self._point_selection(sim, h_img, w_img, topk=topk, threshold=self.default_threshold_target)
+            threshold = 0.85 * sim.max() if num_classes > 1 else self.default_threshold_target
+            topk_points, topk_labels = self._point_selection(sim, h_img, w_img, topk=topk, threshold=threshold)
             for j in topk_points.keys():
                 prompt_points: List = []
                 prompt_labels: List = []
@@ -570,9 +570,12 @@ class ZeroShotLearningProcessor:
 
             ref_feat = self.model.features.squeeze().permute(1, 2, 0)
             ref_mask = torch.tensor(masks[best_idx], dtype=torch.float32)
-            reference_feat, reference_embedding = self._generate_masked_features(ref_feat, ref_mask, self.default_threshold_reference)
-            if reference_feat is None:
-                continue
+            reference_feat = None
+            default_threshold_reference = self.default_threshold_reference
+            while reference_feat is None:
+                print(f"[*] default_threshold_reference : {default_threshold_reference}")
+                reference_feat, reference_embedding = self._generate_masked_features(ref_feat, ref_mask, self.default_threshold_reference)
+                default_threshold_reference -= 0.1
 
             self.reference_feats.append(reference_feat)
             self.reference_embeddings.append(reference_embedding)
