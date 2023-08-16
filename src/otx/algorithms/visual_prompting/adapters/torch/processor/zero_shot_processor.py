@@ -79,7 +79,7 @@ class ZeroShotLearningProcessor:
         
         return masked_feat, masked_embedding
 
-    def _generate_prompt_info(self, target_feat: torch.Tensor, target_image: np.ndarray, topk: int = 0) -> Tuple[List, ...]:
+    def _point_selection_feature_matching(self, target_feat: torch.Tensor, target_image: np.ndarray, topk: int = 0) -> Tuple[List, ...]:
         """Generate points, labels, and attention similarity which can be used for zero-shot inference."""
         # Cosine similarity
         c_feat, h_feat, w_feat = target_feat.shape
@@ -100,13 +100,12 @@ class ZeroShotLearningProcessor:
 
             # threshold = 0.85 * sim.max() if num_classes > 1 else 0.65
             topk_points, topk_labels = self._point_selection(sim, h_img, w_img, topk=topk, threshold=self.default_threshold_target)
-            best_mask: np.ndarray = np.zeros((h_img, w_img), dtype=np.float32)
             for j in topk_points.keys():
                 prompt_points: List = []
                 prompt_labels: List = []
                 flag_fg: bool = False
                 for point, label in zip(topk_points.get(j), topk_labels.get(j)):
-                    if label == 1 and best_mask[point[1], point[0]] > 0:
+                    if label == 1 and predicted_masks[i][point[1], point[0]] > 0:
                     # Filter already assigned foreground prompts
                         continue
 
@@ -134,8 +133,7 @@ class ZeroShotLearningProcessor:
                     ))
 
                 mask = self._predict_mask(**inputs)
-                # TODO (sungchul): return similarity score
-                predicted_masks[i][mask] += mask
+                predicted_masks[i][mask] = np.mean([sim.detach().cpu().numpy()[point[1], point[0]] for point, label in zip(prompt_points, prompt_labels) if label == 1])
             predicted_masks[i] = np.clip(predicted_masks[i], 0, 1)
 
         return predicted_masks
@@ -573,7 +571,7 @@ class ZeroShotLearningProcessor:
             if mode == "auto_generation":
                 predicted_masks = self._auto_generation_feature_matching(image)
             elif mode == "clustering":
-                predicted_masks = self._generate_prompt_info(target_feat, image)
+                predicted_masks = self._point_selection_feature_matching(target_feat, image)
             else:
                 continue
             total_predicted_masks.append(predicted_masks)
