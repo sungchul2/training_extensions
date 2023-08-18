@@ -15,8 +15,9 @@ from PIL import Image
 from sklearn.utils import shuffle
 from torch.nn import functional as F
 
-from otx.algorithms.visual_prompting.adapters.torch.models.visual_prompters import VisualPrompter
-
+from otx.algorithms.visual_prompting.adapters.torch.models.visual_prompters import (
+    VisualPrompter,
+)
 
 DEFAULT_SETTINGS = dict(
     reference=dict(
@@ -95,7 +96,7 @@ class ZeroShotLearningProcessor:
         
         return masked_feat, masked_embedding
 
-    def _point_selection_feature_matching(self, target_feat: torch.Tensor, target_image: np.ndarray, return_score: bool, topk: int = 0) -> Tuple[List, ...]:
+    def _point_selection_feature_matching(self, target_feat: torch.Tensor, target_image: np.ndarray, return_score: bool, topk: int = 0) -> List[np.ndarray]:
         """Generate points, labels, and attention similarity which can be used for zero-shot inference.
         
         Args:
@@ -112,57 +113,60 @@ class ZeroShotLearningProcessor:
         target_feat = target_feat / target_feat.norm(dim=0, keepdim=True)
         target_feat = target_feat.reshape(c_feat, h_feat * w_feat)
         
-        num_classes = len(self.reference_feats)
-        # Positive-negative location prior
-        predicted_masks = np.zeros((num_classes+1, h_img, w_img), dtype=np.float32)
-        for i, ref_feat in enumerate(self.reference_feats):
-            sim = ref_feat @ target_feat
-            sim = sim.reshape(1, 1, h_feat, w_feat)
-            sim = self.model.postprocess_masks(
-                sim,
-                input_size=self.model.input_size,
-                original_size=self.model.original_size).squeeze()
+        predicted_masks = []
+        for reference_feats in self.reference_feats:
+            num_classes = len(reference_feats)
+            # Positive-negative location prior
+            predicted_mask = np.zeros((num_classes+1, h_img, w_img), dtype=np.float32)
+            for i, ref_feat in enumerate(reference_feats):
+                sim = ref_feat @ target_feat
+                sim = sim.reshape(1, 1, h_feat, w_feat)
+                sim = self.model.postprocess_masks(
+                    sim,
+                    input_size=self.model.input_size,
+                    original_size=self.model.original_size).squeeze()
 
-            threshold = 0.85 * sim.max() if num_classes > 1 else self.default_threshold_target
-            topk_points, topk_labels = self._point_selection(sim, h_img, w_img, topk=topk, threshold=threshold)
-            for j in topk_points.keys():
-                prompt_points: List = []
-                prompt_labels: List = []
-                flag_fg: bool = False
-                for point, label in zip(topk_points.get(j), topk_labels.get(j)):
-                    if label == 1 and predicted_masks[i+1][point[1], point[0]] > 0:
-                    # Filter already assigned foreground prompts
+                threshold = 0.85 * sim.max() if num_classes > 1 else self.default_threshold_target
+                topk_points, topk_labels = self._point_selection(sim, h_img, w_img, topk=topk, threshold=threshold)
+                for j in topk_points.keys():
+                    prompt_points: List = []
+                    prompt_labels: List = []
+                    flag_fg: bool = False
+                    for point, label in zip(topk_points.get(j), topk_labels.get(j)):
+                        if label == 1 and predicted_mask[i+1][point[1], point[0]] > 0:
+                        # Filter already assigned foreground prompts
+                            continue
+
+                        prompt_points.append(point)
+                        prompt_labels.append(label)
+                        if label == 1:
+                            flag_fg = True
+
+                    if not flag_fg:
+                        # Skip if not using foreground prompts
                         continue
 
-                    prompt_points.append(point)
-                    prompt_labels.append(label)
-                    if label == 1:
-                        flag_fg = True
+                    inputs = {
+                        "prompt_points": np.array(prompt_points),
+                        "prompt_labels": np.array(prompt_labels),
+                    }
+                    if self.use_attn_sim:
+                        # Obtain the target guidance for cross-attention layers
+                        attn_sim = (sim - sim.mean()) / sim.std()
+                        attn_sim = F.interpolate(attn_sim.unsqueeze(0).unsqueeze(0), size=(h_feat, w_feat), mode="bilinear")
+                        attn_sim = attn_sim.sigmoid_().unsqueeze(0).flatten(3)
+                        inputs.update(dict(
+                            attention=attn_sim,
+                            embedding=self.reference_embeddings[i],
+                        ))
 
-                if not flag_fg:
-                    # Skip if not using foreground prompts
-                    continue
-
-                inputs = {
-                    "prompt_points": np.array(prompt_points),
-                    "prompt_labels": np.array(prompt_labels),
-                }
-                if self.use_attn_sim:
-                    # Obtain the target guidance for cross-attention layers
-                    attn_sim = (sim - sim.mean()) / sim.std()
-                    attn_sim = F.interpolate(attn_sim.unsqueeze(0).unsqueeze(0), size=(h_feat, w_feat), mode="bilinear")
-                    attn_sim = attn_sim.sigmoid_().unsqueeze(0).flatten(3)
-                    inputs.update(dict(
-                        attention=attn_sim,
-                        embedding=self.reference_embeddings[i],
-                    ))
-
-                mask = self._predict_mask(**inputs)
-                if return_score:
-                    predicted_masks[i+1][mask] = np.mean([sim.detach().cpu().numpy()[point[1], point[0]] for point, label in zip(prompt_points, prompt_labels) if label == 1])
-                else:
-                    predicted_masks[i+1] += mask.astype(np.float32)
-            predicted_masks[i+1] = np.clip(predicted_masks[i+1], 0, 1)
+                    mask = self._predict_mask(**inputs)
+                    if return_score:
+                        predicted_mask[i+1][mask] = np.mean([sim.detach().cpu().numpy()[point[1], point[0]] for point, label in zip(prompt_points, prompt_labels) if label == 1])
+                    else:
+                        predicted_mask[i+1] += mask.astype(np.float32)
+                predicted_mask[i+1] = np.clip(predicted_mask[i+1], 0, 1)
+            predicted_masks.append(predicted_mask)
         return predicted_masks
 
     def _point_selection(
@@ -290,7 +294,7 @@ class ZeroShotLearningProcessor:
         
         return masks[best_idx]
 
-    def _auto_generation_feature_matching(self, target_feat: torch.Tensor, target_image: np.ndarray, return_score: bool) -> np.ndarray:
+    def _auto_generation_feature_matching(self, target_feat: torch.Tensor, target_image: np.ndarray, return_score: bool) -> List[np.ndarray]:
         """Predict target masks using auto generation.
         
         Args:
@@ -301,25 +305,27 @@ class ZeroShotLearningProcessor:
         Returns:
             (np.ndarray): Predicted mask along with similarity score.
         """
-        num_classes = len(self.reference_feats)
         auto_gen_masks = self.model.auto_generator.generate(target_image)
-        predicted_masks = np.zeros((num_classes+1,) + target_image.shape[:2], dtype=np.float32)
+        predicted_masks = []
+        for reference_feats in self.reference_feats:
+            num_classes = len(reference_feats)
+            predicted_mask = np.zeros((num_classes+1,) + target_image.shape[:2], dtype=np.float32)
+            for i, ref_feat in enumerate(reference_feats):
+                for auto_gen_mask in auto_gen_masks:
+                    target_mask = torch.tensor(auto_gen_mask["segmentation"], dtype=torch.float32)
+                    masked_target_feat, _ = self._generate_masked_features(target_feat, target_mask, 0.5)
+                    if masked_target_feat is None:
+                        continue
 
-        for i, ref_feat in enumerate(self.reference_feats):
-            for auto_gen_mask in auto_gen_masks:
-                target_mask = torch.tensor(auto_gen_mask["segmentation"], dtype=torch.float32)
-                masked_target_feat, _ = self._generate_masked_features(target_feat, target_mask, 0.5)
-                if masked_target_feat is None:
-                    continue
-
-                masked_target_feat = masked_target_feat.permute(1, 0)
-                sim = ref_feat @ masked_target_feat
-                if return_score:
-                    predicted_masks[i+1][auto_gen_mask["segmentation"]] = sim.detach().cpu().numpy()[0,0]
-                else:
-                    if sim >= self.default_threshold_target:
-                        predicted_masks[i+1] += auto_gen_mask["segmentation"].astype(np.float32)
-            predicted_masks[i+1] = np.clip(predicted_masks[i+1], 0, 1)
+                    masked_target_feat = masked_target_feat.permute(1, 0)
+                    sim = ref_feat @ masked_target_feat
+                    if return_score:
+                        predicted_mask[i+1][auto_gen_mask["segmentation"]] = sim.detach().cpu().numpy()[0,0]
+                    else:
+                        if sim >= self.default_threshold_target:
+                            predicted_mask[i+1] += auto_gen_mask["segmentation"].astype(np.float32)
+                predicted_mask[i+1] = np.clip(predicted_mask[i+1], 0, 1)
+            predicted_mask.append(predicted_mask)
         return predicted_masks
 
     def _preprocess_prompts(
@@ -499,7 +505,7 @@ class ZeroShotLearningProcessor:
 
     def _infer_reference_prediction(
         self,
-        images: np.ndarray,
+        images: List[np.ndarray],
         prompts: List[Dict[str, Any]],
         params: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -508,7 +514,7 @@ class ZeroShotLearningProcessor:
         Reference prediction using given prompts. These results will be saved at `results_reference` in result dict.
         
         Args:
-            images (np.ndarray): Reference image to be predicted by using given prompts.
+            images (list): List of reference images to be predicted by using given prompts. Currently, single reference is only supported.
             prompts (list): List of multi class prompts. Both background prompt and foreground prompt have similar format,
                 but foreground prompt has label information, too. This given prompts will be processed at _preprocess_prompts.
                 Foreground prompts have `1` as point_labels and background prompts have `0` as point_labels.
@@ -552,46 +558,57 @@ class ZeroShotLearningProcessor:
             print(f"[*] Reinitialize reference image & feature.")
             self._initialize_reference()
 
-        height, width, _ = images.shape
-        self.model.set_image(images)
-        ref_masks = {}
+        reference_results = defaultdict(list)
+        for image, prompt in zip(images, prompts):
+            height, width, _ = image.shape
+            self.model.set_image(image)
+            processed_prompts = self._preprocess_prompts(prompt, height, width)
 
-        processed_prompts = self._preprocess_prompts(prompts, height, width)
-        results_reference = []
-        for label, input_prompts in processed_prompts.items():
-            if label == 0:
-                # background
-                continue
+            reference_feats = []
+            reference_embeddings = []
+            results_reference = []
+            for label, input_prompts in processed_prompts.items():
+                if label == 0:
+                    # background
+                    continue
 
-            merged_input_prompts = self._merge_prompts(label, input_prompts, processed_prompts)
-            merged_input_prompts.update({"mask_input": self.reference_logit})
-            masks, scores, logits, _ = self.model.predict(**merged_input_prompts, multimask_output=True)
-            best_idx = np.argmax(scores)
+                merged_input_prompts = self._merge_prompts(label, input_prompts, processed_prompts)
+                merged_input_prompts.update({"mask_input": self.reference_logit})
+                masks, scores, logits, _ = self.model.predict(**merged_input_prompts, multimask_output=True)
+                best_idx = np.argmax(scores)
 
-            ref_feat = self.model.features.squeeze().permute(1, 2, 0)
-            ref_mask = torch.tensor(masks[best_idx], dtype=torch.float32)
-            reference_feat = None
-            default_threshold_reference = self.default_threshold_reference
-            while reference_feat is None:
-                print(f"[*] default_threshold_reference : {default_threshold_reference}")
-                reference_feat, reference_embedding = self._generate_masked_features(ref_feat, ref_mask, self.default_threshold_reference)
-                default_threshold_reference -= 0.1
+                ref_feat = self.model.features.squeeze().permute(1, 2, 0)
+                ref_mask = torch.tensor(masks[best_idx], dtype=torch.float32)
+                reference_feat = None
+                default_threshold_reference = self.default_threshold_reference
+                while reference_feat is None:
+                    print(f"[*] default_threshold_reference : {default_threshold_reference}")
+                    reference_feat, reference_embedding = self._generate_masked_features(ref_feat, ref_mask, self.default_threshold_reference)
+                    default_threshold_reference -= 0.1
 
-            self.reference_feats.append(reference_feat)
-            self.reference_embeddings.append(reference_embedding)
+                reference_feats.append(reference_feat)
+                reference_embeddings.append(reference_embedding)
+                results_reference.append(masks[best_idx])
+                if params.get("use_logit", DEFAULT_SETTINGS["reference"]["use_logit"]):
+                    self.reference_logit = logits[best_idx][None]
 
-            self.reference_logit = logits[best_idx][None] if params.get("use_logit", DEFAULT_SETTINGS["reference"]["use_logit"]) else None
-            results_reference.append(masks[best_idx])
+            self.reference_feats.append(reference_feats)
+            self.reference_embeddings.append(reference_embeddings)
+            reference_results["results_reference"].append(
+                np.concatenate((
+                    np.zeros((1, height, width)), np.stack(results_reference, axis=0)
+                ), axis=0)
+            )
 
-        ref_masks["results_reference"] = np.concatenate((
-            np.zeros((1, height, width)), np.stack(results_reference, axis=0)
-        ), axis=0)
+            if params.get("do_target_seg", DEFAULT_SETTINGS["reference"]["do_target_seg"]):
+                reference_results["results_target"].append(
+                    self._infer_target_segmentation([image], params.get("target_params", DEFAULT_SETTINGS["reference"]["target_params"]))
+                )
 
-        if params.get("do_target_seg", DEFAULT_SETTINGS["reference"]["do_target_seg"]):
-            ref_masks["results_target"] = self._infer_target_segmentation([images], params.get("target_params", DEFAULT_SETTINGS["reference"]["target_params"]))
-        return ref_masks
+            self.model.reset_image()
+        return reference_results
 
-    def _infer_target_segmentation(self, images: List[np.ndarray], params: Dict[str, Any]) -> List[np.ndarray]:
+    def _infer_target_segmentation(self, images: List[np.ndarray], params: Dict[str, Any]) -> List[List[np.ndarray]]:
         """Referring segmentation to targets using reference features.
         
         Args:
@@ -621,6 +638,13 @@ class ZeroShotLearningProcessor:
             total_predicted_masks.append(predicted_masks)
         return total_predicted_masks
 
+    def __inspect_image_format(self, images: List[Union[np.ndarray, Image.Image]]) -> List[np.ndarray]:
+        assert isinstance(images, (tuple, list)), f"images must be wrapped by iterable instances, list or tuple, given {type(images)}."
+        assert any(isinstance(image, (np.ndarray, Image.Image)) for image in images), f"images must be set of np.ndarray or Image.Image."
+        if any(not isinstance(image, np.ndarray) for image in images):
+            images = [np.array(image, dtype=np.uint8) for image in images]
+        return images
+
     def infer(self, images: List[Union[np.ndarray, Image.Image]], params: Dict[str, Any], prompts: Optional[Dict[str, Any]] = None) -> Any:
         """Inference for zero-shot learning.
         
@@ -630,25 +654,17 @@ class ZeroShotLearningProcessor:
             2. Referring segmentation (target segmentation)
                 - Inference to other given test image(s) using reference feature
         """
+        images = self.__inspect_image_format(images)
         if params.get("type") == "base":
-            assert isinstance(images, (np.ndarray, Image.Image)), f"images must be np.ndarray or Image.Image, given {type(images)}."
-            if isinstance(images, Image.Image):
-                images = np.array(images, dtype=np.uint8)
             return self._infer_visual_prompt(images, prompts)
         
         elif params.get("type") == "target":
-            assert isinstance(images, (tuple, list)), f"images must be wrapped by iterable instances, list or tuple, given {type(images)}."
-            assert any(isinstance(image, (np.ndarray, Image.Image)) for image in images), f"images must be set of np.ndarray or Image.Image."
-            if any(not isinstance(image, np.ndarray) for image in images):
-                images = [np.array(image) for image in images]
             return self._infer_target_segmentation(images, params)
 
     def learn(self, images: List[Union[np.ndarray, Image.Image]], params: Dict[str, Any], prompts: Optional[Dict[str, Any]] = None) -> Any:
         """Learn reference features for zero-shot learning."""
+        images = self.__inspect_image_format(images)
         if params.get("type") == "reference":
-            assert isinstance(images, (np.ndarray, Image.Image)), f"images must be np.ndarray or Image.Image, given {type(images)}."
-            if isinstance(images, Image.Image):
-                images = np.array(images, dtype=np.uint8)
             return self._infer_reference_prediction(images, prompts, params)
         else:
             raise ValueError(f"type for `learn` must be `reference`. Current: {params.get('type')}")
