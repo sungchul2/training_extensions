@@ -621,15 +621,13 @@ class ZeroShotLearningProcessor:
             total_predicted_masks.append(predicted_masks)
         return total_predicted_masks
 
-    def infer(self, images: Union[List[Any], np.ndarray, Image.Image], params: Dict[str, Any], prompts: Optional[Dict[str, Any]] = None) -> Any:
-        """Inference for zero-shot learning using PerSAM inference logic.
+    def infer(self, images: List[Union[np.ndarray, Image.Image]], params: Dict[str, Any], prompts: Optional[Dict[str, Any]] = None) -> Any:
+        """Inference for zero-shot learning.
         
-        This inference supports three inference types:
+        This inference supports two inference types:
             1. Base visual prompting
                 - Basic visual prompting inference to given image using given prompts
-            2. Reference prediction
-                - Basic visual prompting inference to given reference image using given prompts
-            3. Referring segmentation (target segmentation)
+            2. Referring segmentation (target segmentation)
                 - Inference to other given test image(s) using reference feature
         """
         if params.get("type") == "base":
@@ -637,12 +635,6 @@ class ZeroShotLearningProcessor:
             if isinstance(images, Image.Image):
                 images = np.array(images, dtype=np.uint8)
             return self._infer_visual_prompt(images, prompts)
-
-        elif params.get("type") == "reference":
-            assert isinstance(images, (np.ndarray, Image.Image)), f"images must be np.ndarray or Image.Image, given {type(images)}."
-            if isinstance(images, Image.Image):
-                images = np.array(images, dtype=np.uint8)
-            return self._infer_reference_prediction(images, prompts, params)
         
         elif params.get("type") == "target":
             assert isinstance(images, (tuple, list)), f"images must be wrapped by iterable instances, list or tuple, given {type(images)}."
@@ -650,3 +642,13 @@ class ZeroShotLearningProcessor:
             if any(not isinstance(image, np.ndarray) for image in images):
                 images = [np.array(image) for image in images]
             return self._infer_target_segmentation(images, params)
+
+    def learn(self, images: List[Union[np.ndarray, Image.Image]], params: Dict[str, Any], prompts: Optional[Dict[str, Any]] = None) -> Any:
+        """Learn reference features for zero-shot learning."""
+        if params.get("type") == "reference":
+            assert isinstance(images, (np.ndarray, Image.Image)), f"images must be np.ndarray or Image.Image, given {type(images)}."
+            if isinstance(images, Image.Image):
+                images = np.array(images, dtype=np.uint8)
+            return self._infer_reference_prediction(images, prompts, params)
+        else:
+            raise ValueError(f"type for `learn` must be `reference`. Current: {params.get('type')}")
