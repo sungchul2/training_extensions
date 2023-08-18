@@ -103,13 +103,14 @@ class ZeroShotLearningProcessor:
         
         return masked_feat, masked_embedding
 
-    def _point_selection_feature_matching(self, target_feat: torch.Tensor, target_image: np.ndarray, return_score: bool, topk: int = 0) -> List[np.ndarray]:
+    def _point_selection_feature_matching(self, target_feat: torch.Tensor, target_image: np.ndarray, return_score: bool, topk: int = 0, manual_ref_feats: Optional[List[torch.Tensor]] = None) -> List[np.ndarray]:
         """Generate points, labels, and attention similarity which can be used for zero-shot inference.
         
         Args:
             target_feat (torch.Tensor): Target feature.
             target_image (np.ndarray): Target image.
             return_score (bool): Whether return prediction score for each instance or the final mask by threshold, defaults to False.
+            manual_ref_feats (list, optional): Not to use all of generated reference features, defaults to None.
             
         Returns:
             (np.ndarray): Predicted mask along with similarity score.
@@ -121,7 +122,8 @@ class ZeroShotLearningProcessor:
         target_feat = target_feat.reshape(c_feat, h_feat * w_feat)
         
         predicted_masks = []
-        for reference_feats in self.reference_feats:
+        used_reference_features = self.reference_feats if manual_ref_feats is None else [manual_ref_feats]
+        for reference_feats in used_reference_features:
             num_classes = len(reference_feats)
             # Positive-negative location prior
             predicted_mask = np.zeros((num_classes+1, h_img, w_img), dtype=np.float32)
@@ -305,20 +307,22 @@ class ZeroShotLearningProcessor:
         
         return masks[best_idx]
 
-    def _auto_generation_feature_matching(self, target_feat: torch.Tensor, target_image: np.ndarray, return_score: bool) -> List[np.ndarray]:
+    def _auto_generation_feature_matching(self, target_feat: torch.Tensor, target_image: np.ndarray, return_score: bool, manual_ref_feats: Optional[List[torch.Tensor]] = None) -> List[np.ndarray]:
         """Predict target masks using auto generation.
         
         Args:
             target_feat (torch.Tensor): Target feature.
             target_image (np.ndarray): Target image.
             return_score (bool): Whether return prediction score for each instance or the final mask by threshold, defaults to False.
+            manual_ref_feats (list, optional): Not to use all of generated reference features, defaults to None.
             
         Returns:
             (np.ndarray): Predicted mask along with similarity score.
         """
         auto_gen_masks = self.model.auto_generator.generate(target_image)
         predicted_masks = []
-        for reference_feats in self.reference_feats:
+        used_reference_features = self.reference_feats if manual_ref_feats is None else [manual_ref_feats]
+        for reference_feats in used_reference_features:
             num_classes = len(reference_feats)
             predicted_mask = np.zeros((num_classes+1,) + target_image.shape[:2], dtype=np.float32)
             for i, ref_feat in enumerate(reference_feats):
@@ -638,20 +642,22 @@ class ZeroShotLearningProcessor:
                 ), axis=0)
             )
 
-            if params.get("do_target_seg", DEFAULT_SETTINGS["reference"]["do_target_seg"]):
-                reference_results["results_target"].append(
-                    self._infer_target_segmentation([image], params.get("target_params", DEFAULT_SETTINGS["reference"]["target_params"]))
-                )
-
             self.model.reset_image()
+
+        if params.get("do_target_seg", DEFAULT_SETTINGS["reference"]["do_target_seg"]):
+            for image, manual_ref_feats in zip(images, self.reference_feats):
+                reference_results["results_target"] += self._infer_target_segmentation(
+                    [image], params.get("target_params", DEFAULT_SETTINGS["reference"]["target_params"]), manual_ref_feats)
+
         return reference_results
 
-    def _infer_target_segmentation(self, images: List[np.ndarray], params: Dict[str, Any]) -> List[List[np.ndarray]]:
+    def _infer_target_segmentation(self, images: List[np.ndarray], params: Dict[str, Any], manual_ref_feats: Optional[List[torch.Tensor]] = None) -> List[List[np.ndarray]]:
         """Referring segmentation to targets using reference features.
         
         Args:
             images (list): List of target images.
             params (dict): Parameters for target segmentation.
+            manual_ref_feats (list, optional): Not to use all of generated reference features, defaults to None.
 
         Returns:
             (list): List of results of each target image. Each result is a mask with CxHxW shape.
@@ -668,9 +674,9 @@ class ZeroShotLearningProcessor:
             self.model.set_image(image)
             target_feat = self.model.features.squeeze()
             if mode == "auto_generation":
-                predicted_masks = self._auto_generation_feature_matching(target_feat.permute(1, 2, 0), image, return_score)
+                predicted_masks = self._auto_generation_feature_matching(target_feat.permute(1, 2, 0), image, return_score, manual_ref_feats=manual_ref_feats)
             elif mode == "point_selection":
-                predicted_masks = self._point_selection_feature_matching(target_feat, image, return_score)
+                predicted_masks = self._point_selection_feature_matching(target_feat, image, return_score, manual_ref_feats=manual_ref_feats)
             else:
                 continue
             total_predicted_masks.append(predicted_masks)
