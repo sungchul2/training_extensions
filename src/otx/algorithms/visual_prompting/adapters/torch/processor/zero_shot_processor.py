@@ -746,7 +746,7 @@ class ZeroShotLearningProcessor:
             features = torch.load(path)
             for k, v in features.items():
                 if len(getattr(self, k)) > 0:
-                    logger.warning(f"{k} is already set, will be overlapped to loaded {k}.")
+                    logger.warning(f"Because {k} is already set, it will be overwritten with loaded {k}.")
                 setattr(self, k, v)
         else:
             raise ValueError(f"{extension} is not supported to load features and embeddings. Use .pth/.pt")
