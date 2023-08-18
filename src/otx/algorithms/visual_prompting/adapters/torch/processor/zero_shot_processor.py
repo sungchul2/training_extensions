@@ -48,6 +48,7 @@ class ZeroShotLearningProcessor:
         use_attn_sim (bool): Whether using attention similarity used at PerSAM, defaults to False.
         default_threshold_reference (float): Threshold used for reference features, defaults to 0.3.
         default_threshold_target (float): Threshold used for target point selection, defaults to 0.65.
+        default_reference_path (str): Path to save and load reference features, defaults to reference_features.pth in the same dirctory with processor.
         device (str): Device setting, defaults to cuda.
     """
     def __init__(
