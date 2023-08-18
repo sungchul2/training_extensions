@@ -126,6 +126,10 @@ class ZeroShotLearningProcessor:
             # Positive-negative location prior
             predicted_mask = np.zeros((num_classes+1, h_img, w_img), dtype=np.float32)
             for i, ref_feat in enumerate(reference_feats):
+                if ref_feat is None:
+                    # empty class
+                    continue
+
                 sim = ref_feat @ target_feat
                 sim = sim.reshape(1, 1, h_feat, w_feat)
                 sim = self.model.postprocess_masks(
@@ -570,15 +574,25 @@ class ZeroShotLearningProcessor:
             height, width, _ = image.shape
             self.model.set_image(image)
             processed_prompts = self._preprocess_prompts(prompt, height, width)
+            num_classes = max(processed_prompts.keys()) + 1
 
             reference_feats = []
             reference_embeddings = []
             results_reference = []
-            for label, input_prompts in processed_prompts.items():
+            for label in range(num_classes):
+            # for label, input_prompts in processed_prompts.items():
                 if label == 0:
-                    # background
+                    # background or empty class
                     continue
 
+                if label not in processed_prompts:
+                    # for empty class
+                    reference_feats.append(None)
+                    reference_embeddings.append(None)
+                    results_reference.append(np.zeros((height, width)))
+                    continue
+
+                input_prompts = processed_prompts.get(label)
                 merged_input_prompts = self._merge_prompts(label, input_prompts, processed_prompts)
                 merged_input_prompts.update({"mask_input": self.reference_logit})
                 masks, scores, logits, _ = self.model.predict(**merged_input_prompts, multimask_output=True)
