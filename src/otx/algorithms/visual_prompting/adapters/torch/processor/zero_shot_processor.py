@@ -455,69 +455,83 @@ class ZeroShotLearningProcessor:
 
     def _infer_visual_prompt(
         self,
-        images: np.ndarray,
-        prompts: List[Dict[str, Any]],
+        images: List[np.ndarray],
+        prompts: List[List[Dict[str, Any]]],
     ) -> Dict[str, np.ndarray]:
         """Base visual prompt prediction.
         
         Args:
-            images (np.ndarray): An image to be predicted by using given prompts.
+            images (list): List of images to be predicted by using given prompts.
             prompts (list): List of multi class prompts. Both background prompt and foreground prompt have similar format,
                 but foreground prompt has label information, too. This given prompts will be processed at _preprocess_prompts.
                 Foreground prompts have `1` as point_labels and background prompts have `0` as point_labels.
 
                 [Example]
                 prompts = [
-                    {
-                        "type": "point",
-                        "point_coords": np.array([[100, 200]]),
-                        "point_labels": np.array([1]),
-                        "label": 1
-                    }, # foreground which has label 1 and type is point
-                    {
-                        "type": "point",
-                        "point_coords": np.array([[200, 200]]),
-                        "point_labels": np.array([0]),
-                    }, # background
-                    {
-                        "type": "polygon",
-                        "point_coords": np.array([[100, 300], [102, 298], ...]), # polygon of a scribble
-                        "point_labels": np.array([1]),
-                        "label": 2
-                    }, # foreground which has label 2 and type is polygon (scribble)
-                    {
-                        "type": "box",
-                        "point_coords": np.array([[100, 300], [400, 400]]), # (x1, y1), (x2, y2)
-                        "point_labels": np.array([1]),
-                        "label": 1
-                    }, # foreground which has label 1 but different prompt
+                    [
+                        {
+                            "type": "point",
+                            "point_coords": np.array([[100, 200]]),
+                            "point_labels": np.array([1]),
+                            "label": 1
+                        }, # foreground which has label 1 and type is point
+                        {
+                            "type": "point",
+                            "point_coords": np.array([[200, 200]]),
+                            "point_labels": np.array([0]),
+                        }, # background
+                        {
+                            "type": "polygon",
+                            "point_coords": np.array([[100, 300], [102, 298], ...]), # polygon of a scribble
+                            "point_labels": np.array([1]),
+                            "label": 2
+                        }, # foreground which has label 2 and type is polygon (scribble)
+                        {
+                            "type": "box",
+                            "point_coords": np.array([[100, 300], [400, 400]]), # (x1, y1), (x2, y2)
+                            "point_labels": np.array([1]),
+                            "label": 1
+                        }, # foreground which has label 1 but different prompt
+                    ], # for the first reference image
+                    [...], # for the second reference image
+                    ...
                 ]
 
         Returns:
             (dict): Base visual prompting results.
         """
-        height, width, _ = images.shape
-        self.model.set_image(images)
+        results_visual_prompts = []
+        for image, prompt in zip(images, prompts):
+            height, width, _ = image.shape
+            self.model.set_image(image)
 
-        processed_prompts = self._preprocess_prompts(prompts, height, width)
-        results_visual_prompt = np.zeros((1, height, width))
-        for label, input_prompts in processed_prompts.items():
-            if label == 0:
-                # background
-                continue
+            processed_prompts = self._preprocess_prompts(prompt, height, width)
+            num_classes = max(processed_prompts.keys()) + 1
+            results_visual_prompt = np.zeros((1, height, width))
+            for label in range(num_classes):
+                if label == 0:
+                    # background
+                    continue
 
-            merged_input_prompts = self._merge_prompts(label, input_prompts, processed_prompts)
-            merged_input_prompts.update({"mask_input": self.reference_logit})
-            masks, scores, logits, _ = self.model.predict(**merged_input_prompts, multimask_output=True)
-            best_idx = np.argmax(scores)
+                if label not in processed_prompts:
+                    # for empty class
+                    results_visual_prompt = np.concatenate((results_visual_prompt, np.zeros((1, height, width))), axis=0)
+                    continue
 
-            results_visual_prompt = np.concatenate((results_visual_prompt, masks[best_idx][None]), axis=0)
-        return {"results_visual_prompt": results_visual_prompt}
+                input_prompts = processed_prompts.get(label)
+                merged_input_prompts = self._merge_prompts(label, input_prompts, processed_prompts)
+                merged_input_prompts.update({"mask_input": self.reference_logit})
+                masks, scores, _, _ = self.model.predict(**merged_input_prompts, multimask_output=True)
+                best_idx = np.argmax(scores)
+
+                results_visual_prompt = np.concatenate((results_visual_prompt, masks[best_idx][None]), axis=0)
+            results_visual_prompts.append(results_visual_prompt)
+        return {"results_visual_prompt": results_visual_prompts}
 
     def _infer_reference_prediction(
         self,
         images: List[np.ndarray],
-        prompts: List[Dict[str, Any]],
+        prompts: List[List[Dict[str, Any]]],
         params: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Reference prediction.
@@ -532,29 +546,33 @@ class ZeroShotLearningProcessor:
 
                 [Example]
                 prompts = [
-                    {
-                        "type": "point",
-                        "point_coords": np.array([[100, 200]]),
-                        "point_labels": np.array([1]),
-                        "label": 1
-                    }, # foreground which has label 1 and type is point
-                    {
-                        "type": "point",
-                        "point_coords": np.array([[200, 200]]),
-                        "point_labels": np.array([0]),
-                    }, # background
-                    {
-                        "type": "polygon",
-                        "point_coords": np.array([[100, 300], [102, 298], ...]), # polygon of a scribble
-                        "point_labels": np.array([1]),
-                        "label": 2
-                    }, # foreground which has label 2 and type is polygon (scribble)
-                    {
-                        "type": "box",
-                        "point_coords": np.array([[100, 300], [400, 400]]), # (x1, y1), (x2, y2)
-                        "point_labels": np.array([1]),
-                        "label": 1
-                    }, # foreground which has label 1 but different prompt
+                    [
+                        {
+                            "type": "point",
+                            "point_coords": np.array([[100, 200]]),
+                            "point_labels": np.array([1]),
+                            "label": 1
+                        }, # foreground which has label 1 and type is point
+                        {
+                            "type": "point",
+                            "point_coords": np.array([[200, 200]]),
+                            "point_labels": np.array([0]),
+                        }, # background
+                        {
+                            "type": "polygon",
+                            "point_coords": np.array([[100, 300], [102, 298], ...]), # polygon of a scribble
+                            "point_labels": np.array([1]),
+                            "label": 2
+                        }, # foreground which has label 2 and type is polygon (scribble)
+                        {
+                            "type": "box",
+                            "point_coords": np.array([[100, 300], [400, 400]]), # (x1, y1), (x2, y2)
+                            "point_labels": np.array([1]),
+                            "label": 1
+                        }, # foreground which has label 1 but different prompt
+                    ], # for the first reference image
+                    [...], # for the second reference image
+                    ...
                 ]
 
             params (dict): Parameters for reference prediction.
@@ -580,9 +598,8 @@ class ZeroShotLearningProcessor:
             reference_embeddings = []
             results_reference = []
             for label in range(num_classes):
-            # for label, input_prompts in processed_prompts.items():
                 if label == 0:
-                    # background or empty class
+                    # background
                     continue
 
                 if label not in processed_prompts:
@@ -666,7 +683,7 @@ class ZeroShotLearningProcessor:
             images = [np.array(image, dtype=np.uint8) for image in images]
         return images
 
-    def infer(self, images: List[Union[np.ndarray, Image.Image]], params: Dict[str, Any], prompts: Optional[Dict[str, Any]] = None) -> Any:
+    def infer(self, images: List[Union[np.ndarray, Image.Image]], params: Dict[str, Any], prompts: Optional[List[List[Dict[str, Any]]]] = None) -> Any:
         """Inference for zero-shot learning.
         
         This inference supports two inference types:
@@ -682,7 +699,7 @@ class ZeroShotLearningProcessor:
         elif params.get("type") == "target":
             return self._infer_target_segmentation(images, params)
 
-    def learn(self, images: List[Union[np.ndarray, Image.Image]], params: Dict[str, Any], prompts: Optional[Dict[str, Any]] = None) -> Any:
+    def learn(self, images: List[Union[np.ndarray, Image.Image]], params: Dict[str, Any], prompts: Optional[List[List[Dict[str, Any]]]] = None) -> Any:
         """Learn reference features for zero-shot learning."""
         images = self.__inspect_image_format(images)
         if params.get("type") == "reference":
