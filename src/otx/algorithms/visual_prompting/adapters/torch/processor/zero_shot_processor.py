@@ -6,8 +6,10 @@
 
 from collections import defaultdict
 from copy import deepcopy
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import os
 import cv2
 import numpy as np
 import torch
@@ -15,9 +17,12 @@ from PIL import Image
 from sklearn.utils import shuffle
 from torch.nn import functional as F
 
+from otx.algorithms.common.utils.logger import get_logger
 from otx.algorithms.visual_prompting.adapters.torch.models.visual_prompters import (
     VisualPrompter,
 )
+
+logger = get_logger()
 
 DEFAULT_SETTINGS = dict(
     reference=dict(
@@ -51,12 +56,14 @@ class ZeroShotLearningProcessor:
         use_attn_sim: bool = False,
         default_threshold_reference: float = 0.3,
         default_threshold_target: float = 0.65,
+        default_reference_path: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reference_features.pth"),
         device: str = "cuda"
     ) -> None:
         self.model = VisualPrompter(type="sam", backbone=backbone, device=device)
         self.use_attn_sim = use_attn_sim
         self.default_threshold_reference = default_threshold_reference
         self.default_threshold_target = default_threshold_target
+        self.default_reference_path = default_reference_path
         self.threshold_target: float
         
         self._initialize_reference()
@@ -555,7 +562,7 @@ class ZeroShotLearningProcessor:
             (dict): Reference prediction results.
         """
         if params.get("reset_feat", DEFAULT_SETTINGS["reference"]["reset_feat"]):
-            print(f"[*] Reinitialize reference image & feature.")
+            logger.info(f"[*] Reinitialize reference image & feature.")
             self._initialize_reference()
 
         reference_results = defaultdict(list)
@@ -582,7 +589,7 @@ class ZeroShotLearningProcessor:
                 reference_feat = None
                 default_threshold_reference = self.default_threshold_reference
                 while reference_feat is None:
-                    print(f"[*] default_threshold_reference : {default_threshold_reference}")
+                    logger.info(f"[*] default_threshold_reference : {default_threshold_reference}")
                     reference_feat, reference_embedding = self._generate_masked_features(ref_feat, ref_mask, self.default_threshold_reference)
                     default_threshold_reference -= 0.1
 
@@ -619,7 +626,7 @@ class ZeroShotLearningProcessor:
             (list): List of results of each target image. Each result is a mask with CxHxW shape.
         """
         if len(params) == 0:
-            print((
+            logger.info((
                 f"[*] Use default settings: "
                 f"{DEFAULT_SETTINGS['target']}"
             ))
@@ -668,3 +675,43 @@ class ZeroShotLearningProcessor:
             return self._infer_reference_prediction(images, prompts, params)
         else:
             raise ValueError(f"type for `learn` must be `reference`. Current: {params.get('type')}")
+
+    def save(self, path: Optional[Union[str, Path]] = None) -> None:
+        """Save reference features and embeddings.
+        
+        Args:
+            path (str, Path, optional): Path to save reference features and embeddings, defaults to None.
+        """
+        assert len(self.reference_feats) > 0 and len(self.reference_embeddings) > 0, "reference features must be generated before saving."
+        if path is None:
+            path = self.default_reference_path
+        
+        _, extension = os.path.splitext(path)
+        if extension in (".pth", ".pt"):
+            features = {"reference_feats": self.reference_feats, "reference_embeddings": self.reference_embeddings}
+            torch.save(features, path)
+        else:
+            raise ValueError(f"{extension} is not supported to save features and embeddings. Use .pth/.pt")
+
+        logger.info(f"Saved at {path}.")
+
+    def load(self, path: Optional[Union[str, Path]] = None) -> None:
+        """Load reference features and embeddings.
+        
+        Args:
+            path (str, Path, optional): Path to load reference features and embeddings, defaults to None.
+        """
+        if path is None:
+            path = self.default_reference_path
+
+        _, extension = os.path.splitext(path)
+        if extension in (".pth", ".pt"):
+            features = torch.load(path)
+            for k, v in features.items():
+                if len(getattr(self, k)) > 0:
+                    logger.warning(f"{k} is already set, will be overlapped to loaded {k}.")
+                setattr(self, k, v)
+        else:
+            raise ValueError(f"{extension} is not supported to load features and embeddings. Use .pth/.pt")
+
+        logger.info(f"Loaded at {path}.")
