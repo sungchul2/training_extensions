@@ -127,7 +127,7 @@ class ZeroShotLearningProcessor:
         for reference_feats in used_reference_features:
             num_classes = len(reference_feats)
             # Positive-negative location prior
-            predicted_mask = np.zeros((num_classes+1, h_img, w_img), dtype=np.float32)
+            predicted_mask = np.zeros((h_img, w_img, num_classes + 1), dtype=np.float32)
             for i, ref_feat in enumerate(reference_feats):
                 if ref_feat is None:
                     # empty class
@@ -147,7 +147,7 @@ class ZeroShotLearningProcessor:
                     prompt_labels: List = []
                     flag_fg: bool = False
                     for point, label in zip(topk_points.get(j), topk_labels.get(j)):
-                        if label == 1 and predicted_mask[i+1][point[1], point[0]] > 0:
+                        if label == 1 and predicted_mask[...,i+1][point[1], point[0]] > 0:
                         # Filter already assigned foreground prompts
                             continue
 
@@ -176,10 +176,10 @@ class ZeroShotLearningProcessor:
 
                     mask = self._predict_mask(**inputs)
                     if return_score:
-                        predicted_mask[i+1][mask] = np.mean([sim.detach().cpu().numpy()[point[1], point[0]] for point, label in zip(prompt_points, prompt_labels) if label == 1])
+                        predicted_mask[...,i+1][mask] = np.mean([sim.detach().cpu().numpy()[point[1], point[0]] for point, label in zip(prompt_points, prompt_labels) if label == 1])
                     else:
-                        predicted_mask[i+1] += mask.astype(np.float32)
-                predicted_mask[i+1] = np.clip(predicted_mask[i+1], 0, 1)
+                        predicted_mask[...,i+1] += mask.astype(np.float32)
+                predicted_mask[...,i+1] = np.clip(predicted_mask[...,i+1], 0, 1)
             predicted_masks.append(predicted_mask)
         return predicted_masks
 
@@ -325,7 +325,7 @@ class ZeroShotLearningProcessor:
         used_reference_features = self.reference_feats if manual_ref_feats is None else [manual_ref_feats]
         for reference_feats in used_reference_features:
             num_classes = len(reference_feats)
-            predicted_mask = np.zeros((num_classes+1,) + target_image.shape[:2], dtype=np.float32)
+            predicted_mask = np.zeros(target_image.shape[:2] + (num_classes + 1,), dtype=np.float32)
             for i, ref_feat in enumerate(reference_feats):
                 for auto_gen_mask in auto_gen_masks:
                     target_mask = torch.tensor(auto_gen_mask["segmentation"], dtype=torch.float32)
@@ -336,11 +336,11 @@ class ZeroShotLearningProcessor:
                     masked_target_feat = masked_target_feat.permute(1, 0)
                     sim = ref_feat @ masked_target_feat
                     if return_score:
-                        predicted_mask[i+1][auto_gen_mask["segmentation"]] = sim.detach().cpu().numpy()[0,0]
+                        predicted_mask[...,i+1][auto_gen_mask["segmentation"]] = sim.detach().cpu().numpy()[0,0]
                     else:
                         if sim >= self.default_threshold_target:
-                            predicted_mask[i+1] += auto_gen_mask["segmentation"].astype(np.float32)
-                predicted_mask[i+1] = np.clip(predicted_mask[i+1], 0, 1)
+                            predicted_mask[...,i+1] += auto_gen_mask["segmentation"].astype(np.float32)
+                predicted_mask[...,i+1] = np.clip(predicted_mask[...,i+1], 0, 1)
             predicted_mask.append(predicted_mask)
         return predicted_masks
 
@@ -512,7 +512,7 @@ class ZeroShotLearningProcessor:
 
             processed_prompts = self._preprocess_prompts(prompt, height, width)
             num_classes = max(processed_prompts.keys()) + 1
-            results_visual_prompt = np.zeros((1, height, width))
+            results_visual_prompt = np.zeros((height, width, 1))
             for label in range(num_classes):
                 if label == 0:
                     # background
@@ -520,7 +520,7 @@ class ZeroShotLearningProcessor:
 
                 if label not in processed_prompts:
                     # for empty class
-                    results_visual_prompt = np.concatenate((results_visual_prompt, np.zeros((1, height, width))), axis=0)
+                    results_visual_prompt = np.concatenate((results_visual_prompt, np.zeros((height, width, 1))), axis=0)
                     continue
 
                 input_prompts = processed_prompts.get(label)
@@ -529,7 +529,7 @@ class ZeroShotLearningProcessor:
                 masks, scores, _, _ = self.model.predict(**merged_input_prompts, multimask_output=True)
                 best_idx = np.argmax(scores)
 
-                results_visual_prompt = np.concatenate((results_visual_prompt, masks[best_idx][None]), axis=0)
+                results_visual_prompt = np.concatenate((results_visual_prompt, masks[best_idx][...,None]), axis=2)
             results_visual_prompts.append(results_visual_prompt)
         return {"results_visual_prompt": results_visual_prompts}
 
@@ -639,8 +639,8 @@ class ZeroShotLearningProcessor:
             self.reference_embeddings.append(reference_embeddings)
             reference_results["results_reference"].append(
                 np.concatenate((
-                    np.zeros((1, height, width)), np.stack(results_reference, axis=0)
-                ), axis=0)
+                    np.zeros((height, width, 1)), np.stack(results_reference, axis=2)
+                ), axis=2)
             )
 
             self.model.reset_image()
