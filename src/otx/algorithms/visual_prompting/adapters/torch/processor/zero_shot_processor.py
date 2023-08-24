@@ -420,7 +420,7 @@ class ZeroShotLearningProcessor:
                 self._update_value(processed_prompts[prompt.get("label", 0)], "point_labels", np.array(_point_labels))
 
             elif prompt.get("type") == "box":
-                self._update_value(processed_prompts[prompt.get("label", 0)], "box", prompt.get("point_coords"))
+                self._update_value(processed_prompts[prompt.get("label", 0)], "box", prompt.get("point_coords").reshape(-1, 4))
 
         processed_prompts = dict(sorted(processed_prompts.items(), key=lambda x: x[0]))
         return processed_prompts
@@ -575,6 +575,12 @@ class ZeroShotLearningProcessor:
                             "point_labels": np.array([1]),
                             "label": 1
                         }, # foreground which has label 1 but different prompt
+                        {
+                            "type": "annotation",
+                            "point_coords": np.array([[100, 300], [102, 298], ...]), # polygon of an annotation
+                            "point_labels": np.array([1]),
+                            "label": 1
+                        }, # foreground annotation to be directly used
                     ], # for the first reference image
                     [...], # for the second reference image
                     ...
@@ -615,6 +621,7 @@ class ZeroShotLearningProcessor:
                     continue
 
                 input_prompts = processed_prompts.get(label)
+                import pdb;pdb.set_trace()
                 merged_input_prompts = self._merge_prompts(label, input_prompts, processed_prompts)
                 merged_input_prompts.update({"mask_input": self.reference_logit})
                 masks, scores, logits, _ = self.model.predict(**merged_input_prompts, multimask_output=True)
