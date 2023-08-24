@@ -143,16 +143,16 @@ class ZeroShotLearningProcessor:
                 threshold = 0.85 * sim.max() if num_classes > 1 else self.default_threshold_target
                 topk_points, topk_labels = self._point_selection(sim, h_img, w_img, topk=topk, threshold=threshold)
                 for j in topk_points.keys():
-                    prompt_points: List = []
-                    prompt_labels: List = []
+                    point_coords: List = []
+                    point_labels: List = []
                     flag_fg: bool = False
                     for point, label in zip(topk_points.get(j), topk_labels.get(j)):
                         if label == 1 and predicted_mask[...,i+1][point[1], point[0]] > 0:
                         # Filter already assigned foreground prompts
                             continue
 
-                        prompt_points.append(point)
-                        prompt_labels.append(label)
+                        point_coords.append(point)
+                        point_labels.append(label)
                         if label == 1:
                             flag_fg = True
 
@@ -161,8 +161,8 @@ class ZeroShotLearningProcessor:
                         continue
 
                     inputs = {
-                        "prompt_points": np.array(prompt_points),
-                        "prompt_labels": np.array(prompt_labels),
+                        "point_coords": np.array(point_coords),
+                        "point_labels": np.array(point_labels),
                     }
                     if self.use_attn_sim:
                         # Obtain the target guidance for cross-attention layers
@@ -176,7 +176,7 @@ class ZeroShotLearningProcessor:
 
                     mask = self._predict_mask(**inputs)
                     if return_score:
-                        predicted_mask[...,i+1][mask] = np.mean([sim.detach().cpu().numpy()[point[1], point[0]] for point, label in zip(prompt_points, prompt_labels) if label == 1])
+                        predicted_mask[...,i+1][mask] = np.mean([sim.detach().cpu().numpy()[point[1], point[0]] for point, label in zip(point_coords, point_labels) if label == 1])
                     else:
                         predicted_mask[...,i+1] += mask.astype(np.float32)
                 predicted_mask[...,i+1] = np.clip(predicted_mask[...,i+1], 0, 1)
@@ -249,16 +249,16 @@ class ZeroShotLearningProcessor:
 
     def _predict_mask(
         self,
-        prompt_points: torch.Tensor,
-        prompt_labels: torch.Tensor,
+        point_coords: torch.Tensor,
+        point_labels: torch.Tensor,
         attention: Optional[torch.Tensor] = None,
         embedding: Optional[torch.Tensor] = None
     ) -> np.ndarray:
         """Predict target masks.
         
         Args:
-            prompt_points (torch.Tensor): Selected points as point prompts from similarity map.
-            prompt_labels (torch.Tensor): Labels that are set in foreground or background.
+            point_coords (torch.Tensor): Selected points as point prompts from similarity map.
+            point_labels (torch.Tensor): Labels that are set in foreground or background.
             attention (torch.Tensor, optional): Target-guided attention used at PerSAM.
             embedding (torch.Tensor, optional): Target-semantic Prompting used at PerSAM.
 
@@ -268,24 +268,24 @@ class ZeroShotLearningProcessor:
         # First-step prediction
         if attention is not None and embedding is not None:
             masks, scores, logits, _ = self.model.predict(
-                point_coords=prompt_points, 
-                point_labels=prompt_labels, 
+                point_coords=point_coords, 
+                point_labels=point_labels,
                 multimask_output=False,
                 attn_sim=attention,  # Target-guided Attention
                 reference_embedding=embedding  # Target-semantic Prompting
             )
         else:
             masks, scores, logits, _ = self.model.predict(
-                point_coords=prompt_points, 
-                point_labels=prompt_labels, 
+                point_coords=point_coords, 
+                point_labels=point_labels, 
                 multimask_output=False
             )
         best_idx = 0
 
         # Cascaded Post-refinement-1
         masks, scores, logits, _ = self.model.predict(
-                    point_coords=prompt_points,
-                    point_labels=prompt_labels,
+                    point_coords=point_coords,
+                    point_labels=point_labels,
                     mask_input=logits[best_idx: best_idx + 1, :, :], 
                     multimask_output=True)
         best_idx = np.argmax(scores)
@@ -298,8 +298,8 @@ class ZeroShotLearningProcessor:
         y_max = y.max()
         input_box = np.array([x_min, y_min, x_max, y_max])
         masks, scores, logits, _ = self.model.predict(
-            point_coords=prompt_points,
-            point_labels=prompt_labels,
+            point_coords=point_coords,
+            point_labels=point_labels,
             box=input_box[None, :],
             mask_input=logits[best_idx: best_idx + 1, :, :], 
             multimask_output=True)
