@@ -367,34 +367,58 @@ class ZeroShotLearningProcessor:
             convert_mask (bool): Whether converting polygon to mask, defaults to False.
             
         Returns:
-            (dict): Processed and arranged prompts using label information as keys.
+            (dict): Processed and arranged each single prompt using label information as keys.
+                Unlike other prompts, `annotation` prompts will be aggregated as single annotation.
+
+                [Example]
                 processed_prompts = {
-                    0: { # background
-                        "point_coords": np.ndarray(),
-                        "point_labels": np.ndarray(),
-                        "box": np.ndarray(),
-                    },
-                    1: {
-                        "point_coords": np.ndarray(),
-                        "point_labels": np.ndarray(),
-                        "box": np.ndarray(),
-                    },
-                    2: {
-                        "point_coords": np.ndarray(),
-                        "point_labels": np.ndarray(),
-                        "box": np.ndarray(),
-                    }
+                    0: [ # background
+                        {
+                            "point_coords": np.ndarray,
+                            "point_labels": np.ndarray,
+                        },
+                        {
+                            "box": np.ndarray,
+                        },
+                        {
+                            "annotation": np.ndarray, # there is only single processed annotation prompt
+                        },
+                        ...
+                    ],
+                    1: [
+                        {
+                            "point_coords": np.ndarray,
+                            "point_labels": np.ndarray,
+                        },
+                        {
+                            "point_coords": np.ndarray,
+                            "point_labels": np.ndarray,
+                        },
+                        {
+                            "annotation": np.ndarray, # there is only single processed annotation prompt
+                        },
+                        ...
+                    ],
+                    2: [
+                        {
+                            "box": np.ndarray,
+                        },
+                        {
+                            "box": np.ndarray,
+                        },
+                        ...
+                    ]
                 }
         """
-        processed_prompts: Dict[str, Dict[str, Any]] = {}
+        # processed_prompts: Dict[str, Dict[str, Any]] = {}
+        processed_prompts = defaultdict(list)
         for prompt in prompts:
-            if prompt.get("label", 0) not in processed_prompts:
-                # initialize
-                processed_prompts[prompt.get("label", 0)] = defaultdict(dict)
-
+            processed_prompt = {}
             if prompt.get("type") == "point":
-                self._update_value(processed_prompts[prompt.get("label", 0)], "point_coords", prompt.get("point_coords"))
-                self._update_value(processed_prompts[prompt.get("label", 0)], "point_labels", prompt.get("point_labels"))
+                processed_prompt.update({
+                    "point_coords": prompt.get("point_coords"),
+                    "point_labels": prompt.get("point_labels"),
+                })
 
             elif prompt.get("type") == "polygon":
                 polygon = prompt.get("point_coords")
@@ -416,11 +440,17 @@ class ZeroShotLearningProcessor:
                     _point_coords.append([x, y])
                     _point_labels.append(prompt.get("point_labels")[0])
 
-                self._update_value(processed_prompts[prompt.get("label", 0)], "point_coords", np.array(_point_coords))
-                self._update_value(processed_prompts[prompt.get("label", 0)], "point_labels", np.array(_point_labels))
+                processed_prompt.update({
+                    "point_coords": np.array(_point_coords),
+                    "point_labels": np.array(_point_labels),
+                })
 
             elif prompt.get("type") == "box":
-                self._update_value(processed_prompts[prompt.get("label", 0)], "box", prompt.get("point_coords").reshape(-1, 4))
+                processed_prompt.update({
+                    "box": prompt.get("point_coords").reshape(-1, 4),
+                })
+
+            processed_prompts[prompt.get("label", 0)].append(processed_prompt)
 
         processed_prompts = dict(sorted(processed_prompts.items(), key=lambda x: x[0]))
         return processed_prompts
@@ -451,11 +481,11 @@ class ZeroShotLearningProcessor:
                 # only add point (and scribble) prompts
                 # use_only_background=True -> background prompts are only added as background
                 # use_only_background=False -> other prompts are added as background
-                if "point_coords" in other_input_prompts:
-                    # point, scribble
-                    self._update_value(merged_input_prompts, "point_coords", other_input_prompts.get("point_coords"))
-                    self._update_value(merged_input_prompts, "point_labels", np.zeros_like(other_input_prompts.get("point_labels")))
-
+                for other_input_prompt in other_input_prompts:
+                    if "point_coords" in other_input_prompt:
+                        # point, scribble
+                        self._update_value(merged_input_prompts, "point_coords", other_input_prompt.get("point_coords"))
+                        self._update_value(merged_input_prompts, "point_labels", np.zeros_like(other_input_prompt.get("point_labels")))
         return merged_input_prompts
 
     def _infer_visual_prompt(
@@ -524,12 +554,19 @@ class ZeroShotLearningProcessor:
                     continue
 
                 input_prompts = processed_prompts.get(label)
-                merged_input_prompts = self._merge_prompts(label, input_prompts, processed_prompts)
-                merged_input_prompts.update({"mask_input": self.reference_logit})
-                masks, scores, _, _ = self.model.predict(**merged_input_prompts, multimask_output=True)
-                best_idx = np.argmax(scores)
-
-                results_visual_prompt = np.concatenate((results_visual_prompt, masks[best_idx][...,None]), axis=2)
+                results_prompt = np.zeros((height, width))
+                for input_prompt in input_prompts:
+                    if "annotation" in input_prompt:
+                        # directly use annotation information as a mask
+                        results_prompt[input_prompt.get("annotation")] += 1
+                    else:
+                        merged_input_prompts = self._merge_prompts(label, input_prompt, processed_prompts)
+                        merged_input_prompts.update({"mask_input": self.reference_logit})
+                        masks, scores, _, _ = self.model.predict(**merged_input_prompts, multimask_output=True)
+                        best_idx = np.argmax(scores)
+                        results_prompt[masks[best_idx]] += 1
+                results_prompt = np.clip(results_prompt, 0, 1)
+                results_visual_prompt = np.concatenate((results_visual_prompt, results_prompt[...,None]), axis=2)
             results_visual_prompts.append(results_visual_prompt)
         return {"results_visual_prompt": results_visual_prompts}
 
@@ -621,14 +658,23 @@ class ZeroShotLearningProcessor:
                     continue
 
                 input_prompts = processed_prompts.get(label)
-                import pdb;pdb.set_trace()
-                merged_input_prompts = self._merge_prompts(label, input_prompts, processed_prompts)
-                merged_input_prompts.update({"mask_input": self.reference_logit})
-                masks, scores, logits, _ = self.model.predict(**merged_input_prompts, multimask_output=True)
-                best_idx = np.argmax(scores)
+                results_prompt = np.zeros((height, width))
+                for input_prompt in input_prompts:
+                    if "annotation" in input_prompt:
+                        # directly use annotation information as a mask
+                        results_prompt[input_prompt.get("annotation")] += 1
+                    else:
+                        merged_input_prompts = self._merge_prompts(label, input_prompt, processed_prompts)
+                        merged_input_prompts.update({"mask_input": self.reference_logit})
+                        masks, scores, logits, _ = self.model.predict(**merged_input_prompts, multimask_output=True)
+                        if params.get("use_logit", DEFAULT_SETTINGS["reference"]["use_logit"]):
+                            self.reference_logit = logits[best_idx][None]
+                        best_idx = np.argmax(scores)
+                        results_prompt[masks[best_idx]] += 1
+                results_prompt = np.clip(results_prompt, 0, 1)
 
                 ref_feat = self.model.features.squeeze().permute(1, 2, 0)
-                ref_mask = torch.tensor(masks[best_idx], dtype=torch.float32)
+                ref_mask = torch.tensor(results_prompt, dtype=torch.float32)
                 reference_feat = None
                 default_threshold_reference = self.default_threshold_reference
                 while reference_feat is None:
@@ -638,9 +684,7 @@ class ZeroShotLearningProcessor:
 
                 reference_feats.append(reference_feat)
                 reference_embeddings.append(reference_embedding)
-                results_reference.append(masks[best_idx])
-                if params.get("use_logit", DEFAULT_SETTINGS["reference"]["use_logit"]):
-                    self.reference_logit = logits[best_idx][None]
+                results_reference.append(results_prompt)
 
             self.reference_feats.append(reference_feats)
             self.reference_embeddings.append(reference_embeddings)
