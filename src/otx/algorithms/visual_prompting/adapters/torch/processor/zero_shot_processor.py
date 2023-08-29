@@ -31,11 +31,13 @@ DEFAULT_SETTINGS = dict(
         use_logit=False,
         target_params=dict(
             return_score=False,
+            is_cascade=True,
         ),
     ),
     target=dict(
         mode="point_selection",
         return_score=False,
+        is_cascade=True,
     ),
 )
 
@@ -104,7 +106,15 @@ class ZeroShotLearningProcessor:
         
         return masked_feat, masked_embedding
 
-    def _point_selection_feature_matching(self, target_feat: torch.Tensor, target_image: np.ndarray, return_score: bool, topk: int = 0, manual_ref_feats: Optional[List[torch.Tensor]] = None) -> List[np.ndarray]:
+    def _point_selection_feature_matching(
+        self,
+        target_feat: torch.Tensor,
+        target_image: np.ndarray,
+        return_score: bool,
+        topk: int = 0,
+        manual_ref_feats: Optional[List[torch.Tensor]] = None,
+        is_cascade: bool = True,
+    ) -> List[np.ndarray]:
         """Generate points, labels, and attention similarity which can be used for zero-shot inference.
         
         Args:
@@ -112,6 +122,7 @@ class ZeroShotLearningProcessor:
             target_image (np.ndarray): Target image.
             return_score (bool): Whether return prediction score for each instance or the final mask by threshold, defaults to False.
             manual_ref_feats (list, optional): Not to use all of generated reference features, defaults to None.
+            is_cascade (bool): Whether use cascaded post-refinements used at PerSAM, defaults to True.
             
         Returns:
             (np.ndarray): Predicted mask along with similarity score.
@@ -163,6 +174,7 @@ class ZeroShotLearningProcessor:
                     inputs = {
                         "point_coords": np.array(point_coords),
                         "point_labels": np.array(point_labels),
+                        "is_cascade": is_cascade
                     }
                     if self.use_attn_sim:
                         # Obtain the target guidance for cross-attention layers
@@ -252,7 +264,8 @@ class ZeroShotLearningProcessor:
         point_coords: torch.Tensor,
         point_labels: torch.Tensor,
         attention: Optional[torch.Tensor] = None,
-        embedding: Optional[torch.Tensor] = None
+        embedding: Optional[torch.Tensor] = None,
+        is_cascade: bool = True,
     ) -> np.ndarray:
         """Predict target masks.
         
@@ -261,6 +274,7 @@ class ZeroShotLearningProcessor:
             point_labels (torch.Tensor): Labels that are set in foreground or background.
             attention (torch.Tensor, optional): Target-guided attention used at PerSAM.
             embedding (torch.Tensor, optional): Target-semantic Prompting used at PerSAM.
+            is_cascade (bool): Whether use cascaded post-refinements used at PerSAM, defaults to True.
 
         Return:
             (np.ndarray): Predicted mask.
@@ -282,29 +296,30 @@ class ZeroShotLearningProcessor:
             )
         best_idx = 0
 
-        # Cascaded Post-refinement-1
-        masks, scores, logits, _ = self.model.predict(
-                    point_coords=point_coords,
-                    point_labels=point_labels,
-                    mask_input=logits[best_idx: best_idx + 1, :, :], 
-                    multimask_output=True)
-        best_idx = np.argmax(scores)
+        if is_cascade:
+            # Cascaded Post-refinement-1
+            masks, scores, logits, _ = self.model.predict(
+                        point_coords=point_coords,
+                        point_labels=point_labels,
+                        mask_input=logits[best_idx: best_idx + 1, :, :], 
+                        multimask_output=True)
+            best_idx = np.argmax(scores)
 
-        # Cascaded Post-refinement-2
-        y, x = np.nonzero(masks[best_idx])
-        x_min = x.min()
-        x_max = x.max()
-        y_min = y.min()
-        y_max = y.max()
-        input_box = np.array([x_min, y_min, x_max, y_max])
-        masks, scores, logits, _ = self.model.predict(
-            point_coords=point_coords,
-            point_labels=point_labels,
-            box=input_box[None, :],
-            mask_input=logits[best_idx: best_idx + 1, :, :], 
-            multimask_output=True)
-        
-        best_idx = np.argmax(scores)
+            # Cascaded Post-refinement-2
+            y, x = np.nonzero(masks[best_idx])
+            x_min = x.min()
+            x_max = x.max()
+            y_min = y.min()
+            y_max = y.max()
+            input_box = np.array([x_min, y_min, x_max, y_max])
+            masks, scores, logits, _ = self.model.predict(
+                point_coords=point_coords,
+                point_labels=point_labels,
+                box=input_box[None, :],
+                mask_input=logits[best_idx: best_idx + 1, :, :], 
+                multimask_output=True)
+            
+            best_idx = np.argmax(scores)
         
         return masks[best_idx]
 
@@ -752,7 +767,7 @@ class ZeroShotLearningProcessor:
             if mode == "auto_generation":
                 predicted_masks = self._auto_generation_feature_matching(target_feat.permute(1, 2, 0), image, return_score, manual_ref_feats=manual_ref_feats)
             elif mode == "point_selection":
-                predicted_masks = self._point_selection_feature_matching(target_feat, image, return_score, manual_ref_feats=manual_ref_feats)
+                predicted_masks = self._point_selection_feature_matching(target_feat, image, return_score, manual_ref_feats=manual_ref_feats, is_cascade=params.get("is_cascade", True))
             else:
                 continue
             total_predicted_masks.append(predicted_masks)
