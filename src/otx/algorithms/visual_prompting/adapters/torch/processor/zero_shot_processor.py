@@ -33,12 +33,14 @@ DEFAULT_SETTINGS = dict(
         target_params=dict(
             return_score=False,
             is_cascade=True,
+            version=2,
         ),
     ),
     target=dict(
         mode="point_selection",
         return_score=False,
         is_cascade=True,
+        version=2,
     ),
 )
 
@@ -120,6 +122,8 @@ class ZeroShotLearningProcessor:
         topk: int = 0,
         manual_ref_feats: Optional[List[torch.Tensor]] = None,
         is_cascade: bool = True,
+        version: int = 2,
+        num_bg_points: int = 50,
     ) -> List[np.ndarray]:
         """Generate points, labels, and attention similarity which can be used for zero-shot inference.
         
@@ -129,10 +133,17 @@ class ZeroShotLearningProcessor:
             return_score (bool): Whether return prediction score for each instance or the final mask by threshold, defaults to False.
             manual_ref_feats (list, optional): Not to use all of generated reference features, defaults to None.
             is_cascade (bool): Whether use cascaded post-refinements used at PerSAM, defaults to True.
+            version (int): Version of point selection logic, defaults to 2:
+                1: point-by-point selection in high resolution similarity map
+                2: use all points in low resolution similarity map
+            num_bg_points (int): The number of background points to be used on version2, defaults to 50.
             
         Returns:
             (np.ndarray): Predicted mask along with similarity score.
         """
+        if version == 1:
+            logger.warning("point selection version=1 will be deprecated, please use version=2.")
+
         # Cosine similarity
         c_feat, h_feat, w_feat = target_feat.shape
         h_img, w_img, _ = target_image.shape
@@ -151,52 +162,93 @@ class ZeroShotLearningProcessor:
                     continue
 
                 sim = ref_feat @ target_feat
-                sim = sim.reshape(1, 1, h_feat, w_feat)
-                sim = self.model.postprocess_masks(
-                    sim,
-                    input_size=self.model.input_size,
-                    original_size=self.model.original_size).squeeze()
+                if version == 1:
+                    sim = sim.reshape(1, 1, h_feat, w_feat)
+                    sim = self.model.postprocess_masks(
+                        sim,
+                        input_size=self.model.input_size,
+                        original_size=self.model.original_size).squeeze()
 
-                threshold = 0.85 * sim.max() if num_classes > 1 else self.default_threshold_target
-                topk_points, topk_labels = self._point_selection(sim, h_img, w_img, topk=topk, threshold=threshold)
-                for j in topk_points.keys():
-                    point_coords: List = []
-                    point_labels: List = []
-                    flag_fg: bool = False
-                    for point, label in zip(topk_points.get(j), topk_labels.get(j)):
-                        if label == 1 and predicted_mask[...,i+1][point[1], point[0]] > 0:
-                        # Filter already assigned foreground prompts
+                    threshold = 0.85 * sim.max() if num_classes > 1 else self.default_threshold_target
+                    topk_points, topk_labels = self._point_selection(sim, h_img, w_img, topk=topk, threshold=threshold, version=version)
+                    for j in topk_points.keys():
+                        point_coords: List = []
+                        point_labels: List = []
+                        flag_fg: bool = False
+                        for point, label in zip(topk_points.get(j), topk_labels.get(j)):
+                            if label == 1 and predicted_mask[...,i+1][point[1], point[0]] > 0:
+                            # Filter already assigned foreground prompts
+                                continue
+
+                            point_coords.append(point)
+                            point_labels.append(label)
+                            if label == 1:
+                                flag_fg = True
+
+                        if not flag_fg:
+                            # Skip if not using foreground prompts
                             continue
 
-                        point_coords.append(point)
-                        point_labels.append(label)
-                        if label == 1:
-                            flag_fg = True
+                        inputs = {
+                            "point_coords": np.array(point_coords),
+                            "point_labels": np.array(point_labels),
+                            "is_cascade": is_cascade
+                        }
+                        if self.use_attn_sim:
+                            # Obtain the target guidance for cross-attention layers
+                            attn_sim = (sim - sim.mean()) / sim.std()
+                            attn_sim = F.interpolate(attn_sim.unsqueeze(0).unsqueeze(0), size=(h_feat, w_feat), mode="bilinear")
+                            attn_sim = attn_sim.sigmoid_().unsqueeze(0).flatten(3)
+                            inputs.update(dict(
+                                attention=attn_sim,
+                                embedding=self.reference_embeddings[i],
+                            ))
 
-                    if not flag_fg:
-                        # Skip if not using foreground prompts
-                        continue
+                        mask = self._predict_mask(**inputs)
+                        if return_score:
+                            predicted_mask[...,i+1][mask] = np.mean([sim.detach().cpu().numpy()[point[1], point[0]] for point, label in zip(point_coords, point_labels) if label == 1])
+                        else:
+                            predicted_mask[...,i+1] += mask.astype(np.float32)
 
-                    inputs = {
-                        "point_coords": np.array(point_coords),
-                        "point_labels": np.array(point_labels),
-                        "is_cascade": is_cascade
-                    }
-                    if self.use_attn_sim:
-                        # Obtain the target guidance for cross-attention layers
-                        attn_sim = (sim - sim.mean()) / sim.std()
-                        attn_sim = F.interpolate(attn_sim.unsqueeze(0).unsqueeze(0), size=(h_feat, w_feat), mode="bilinear")
-                        attn_sim = attn_sim.sigmoid_().unsqueeze(0).flatten(3)
-                        inputs.update(dict(
-                            attention=attn_sim,
-                            embedding=self.reference_embeddings[i],
-                        ))
-
-                    mask = self._predict_mask(**inputs)
-                    if return_score:
-                        predicted_mask[...,i+1][mask] = np.mean([sim.detach().cpu().numpy()[point[1], point[0]] for point, label in zip(point_coords, point_labels) if label == 1])
+                elif version == 2:
+                    sim = sim.reshape(h_feat, w_feat)
+                    lower_length = int(64 * min(h_img, w_img) / max(h_img, w_img))
+                    if h_img > w_img:
+                        sim = sim[:,:lower_length]
                     else:
-                        predicted_mask[...,i+1] += mask.astype(np.float32)
+                        sim = sim[:lower_length]
+
+                    threshold = self.default_threshold_target
+                    points_scores, bg_coords = self._point_selection(sim, h_img, w_img, topk=topk, threshold=threshold, version=version, num_bg_points=num_bg_points)
+                    bg_mask = self._predict_mask(point_coords=bg_coords.cpu().numpy(), point_labels=np.array([1] * len(bg_coords))) # TODO : enable torch tensor as is
+                    for x, y, score in points_scores.cpu():
+                        if bg_mask[int(y), int(x)]:
+                            continue
+                        if predicted_mask[int(y), int(x), i+1] > 0:
+                            continue
+                            
+                        # TODO : add background points as prompts?
+                        inputs = {
+                            "point_coords": torch.stack((x, y))[None].numpy().astype(np.int32),
+                            "point_labels": np.array([1], dtype=np.int32),
+                            "is_cascade": is_cascade
+                        }
+                        mask = self._predict_mask(**inputs)
+                        
+                        # skip if bg points are in mask
+                        include_bg = False
+                        for bg_coord in bg_coords.cpu():
+                            if mask[int(bg_coord[1]), int(bg_coord[0])]:
+                                include_bg = True
+                                break
+                        if include_bg:
+                            continue
+                        
+                        if return_score:
+                            predicted_mask[...,i+1][mask] = score
+                        else:
+                            predicted_mask[...,i+1] += mask.astype(np.float32)
+                    
                 predicted_mask[...,i+1] = np.clip(predicted_mask[...,i+1], 0, 1)
             predicted_masks.append(predicted_mask)
         return predicted_masks
@@ -207,63 +259,81 @@ class ZeroShotLearningProcessor:
         height: int,
         width: int,
         topk: int = 1,
-        threshold: float = 0.8
+        threshold: float = 0.8,
+        version: int = 2,
+        num_bg_points: int = 50,
     ) -> Tuple[Dict, ...]:
         """Select point used as point prompts."""
-        # TODO (sungchul): refactoring
+        if version == 1:
+            # TODO (sungchul): refactoring
 
-        # Top-1 point selection
-        h, w = mask_sim.shape
-        topk_xy = {}
-        topk_label = {}
-        last_xy = None
-        last_xy = mask_sim.flatten(0).topk(1, largest=False)[1]
-        last_x = (last_xy // w).unsqueeze(0)
-        last_y = (last_xy - last_x * w)
-        last_xy = torch.cat((last_y, last_x), dim=0).permute(1, 0)
-        last_xy = last_xy.cpu().numpy()
+            # Top-1 point selection
+            h, w = mask_sim.shape
+            topk_xy = {}
+            topk_label = {}
+            last_xy = None
+            last_xy = mask_sim.flatten(0).topk(1, largest=False)[1]
+            last_x = (last_xy // w).unsqueeze(0)
+            last_y = (last_xy - last_x * w)
+            last_xy = torch.cat((last_y, last_x), dim=0).permute(1, 0)
+            last_xy = last_xy.cpu().numpy()
 
-        if topk > 0:
-            # Top-last point selection
-            topk_xy = mask_sim.flatten(0).topk(topk)[1]
-            topk_x = (topk_xy // w).unsqueeze(0)
-            topk_y = (topk_xy - topk_x * w)
-            topk_xy = torch.cat((topk_y, topk_x), dim=0).permute(1, 0)
-            topk_label[0] = np.array([1] * topk)
-            topk_xy[0] = topk_xy.cpu().numpy()
-            topk_xy[0].append([last_xy[0][0], last_xy[0][1]])
-            topk_label[0].append(0)
+            if topk > 0:
+                # Top-last point selection
+                topk_xy = mask_sim.flatten(0).topk(topk)[1]
+                topk_x = (topk_xy // w).unsqueeze(0)
+                topk_y = (topk_xy - topk_x * w)
+                topk_xy = torch.cat((topk_y, topk_x), dim=0).permute(1, 0)
+                topk_label[0] = np.array([1] * topk)
+                topk_xy[0] = topk_xy.cpu().numpy()
+                topk_xy[0].append([last_xy[0][0], last_xy[0][1]])
+                topk_label[0].append(0)
 
-        else:
-            # TODO (sungchul): sort coords by similarity score like top-k, not shuffling
-            sim_points = (mask_sim >= threshold)
-            np_xy = torch.nonzero(sim_points*mask_sim)
-            np_xy = shuffle(np_xy.cpu().detach().numpy(), random_state=0)
+            else:
+                # TODO (sungchul): sort coords by similarity score like top-k, not shuffling
+                sim_points = (mask_sim >= threshold)
+                np_xy = torch.nonzero(sim_points*mask_sim)
+                np_xy = shuffle(np_xy.cpu().detach().numpy(), random_state=0)
 
-            max_len = height
-            if max_len < width:
-                max_len = width
+                max_len = height
+                if max_len < width:
+                    max_len = width
 
-            ratio = self.model.image_size / max_len
-            height = int(height * ratio)
-            width = int(width * ratio)
-            n_w = width // 16
-            for i in range(len(np_xy)):
-                x = np_xy[i][1]
-                y = np_xy[i][0]
-                key = int((int(y*ratio)//16)*n_w) + int(x*ratio)//16
-                if key not in topk_xy.keys():
-                    topk_xy[key] = [[x,y]]
-                    topk_label[key] = [1]
-                elif len(topk_xy[key]) < 1:
-                    topk_xy[key].append([x,y])
-                    topk_label[key].append(1)
+                ratio = self.model.image_size / max_len
+                height = int(height * ratio)
+                width = int(width * ratio)
+                n_w = width // 16
+                for i in range(len(np_xy)):
+                    x = np_xy[i][1]
+                    y = np_xy[i][0]
+                    key = int((int(y*ratio)//16)*n_w) + int(x*ratio)//16
+                    if key not in topk_xy.keys():
+                        topk_xy[key] = [[x,y]]
+                        topk_label[key] = [1]
+                    elif len(topk_xy[key]) < 1:
+                        topk_xy[key].append([x,y])
+                        topk_label[key].append(1)
 
-            for i in topk_label.keys():
-                topk_xy[i].append([last_xy[0][0], last_xy[0][1]])
-                topk_label[i].append(0)
+                for i in topk_label.keys():
+                    topk_xy[i].append([last_xy[0][0], last_xy[0][1]])
+                    topk_label[i].append(0)
+            return topk_xy, topk_label
+
+        elif version == 2:
+            h_sim, w_sim = mask_sim.shape
+            scale = max(height / h_sim, width / w_sim)
+            point_coords = torch.where(mask_sim > threshold)
+            points_scores = torch.stack(point_coords[::-1] + (mask_sim[point_coords],), dim=0).T # (x, y, score)
+            points_scores = points_scores[torch.argsort(points_scores[:,-1], descending=True)]
+            points_scores[:,:2] *= scale
             
-        return topk_xy, topk_label
+            values, indices = (-mask_sim).flatten().topk(k=num_bg_points)
+            bg_x = (indices // w_sim).unsqueeze(0)
+            bg_y = (indices - bg_x * w_sim)
+            bg_coords = torch.cat((bg_y, bg_x), dim=0).permute(1, 0) # (x, y)
+            bg_coords = (bg_coords.to(torch.float32) * scale).to(torch.int32)
+
+            return points_scores, bg_coords
 
     def _predict_mask(
         self,
@@ -773,7 +843,12 @@ class ZeroShotLearningProcessor:
             if mode == "auto_generation":
                 predicted_masks = self._auto_generation_feature_matching(target_feat.permute(1, 2, 0), image, return_score, manual_ref_feats=manual_ref_feats)
             elif mode == "point_selection":
-                predicted_masks = self._point_selection_feature_matching(target_feat, image, return_score, manual_ref_feats=manual_ref_feats, is_cascade=params.get("is_cascade", True))
+                predicted_masks = self._point_selection_feature_matching(
+                    target_feat, image, return_score,
+                    manual_ref_feats=manual_ref_feats,
+                    is_cascade=params.get("is_cascade", DEFAULT_SETTINGS["target"].get("is_cascade")),
+                    version=params.get("version", DEFAULT_SETTINGS["target"].get("version")),
+                    num_bg_points=params.get("num_bg_points", 50))
             else:
                 continue
             total_predicted_masks.append(predicted_masks)
