@@ -4,12 +4,12 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
+import os
 from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-import os
 import cv2
 import numpy as np
 import torch
@@ -17,6 +17,7 @@ from PIL import Image
 from sklearn.utils import shuffle
 from torch.nn import functional as F
 
+from otx.algorithms.common.utils import set_random_seed
 from otx.algorithms.common.utils.logger import get_logger
 from otx.algorithms.visual_prompting.adapters.torch.models.visual_prompters import (
     VisualPrompter,
@@ -52,6 +53,8 @@ class ZeroShotLearningProcessor:
         default_threshold_target (float): Threshold used for target point selection, defaults to 0.65.
         default_reference_path (str): Path to save and load reference features, defaults to reference_features.pth in the same dirctory with processor.
         device (str): Device setting, defaults to cuda.
+        seed (int): Seed, defaults to 42.
+        deterministic (bool): Deterministic, defaults to True.
     """
     def __init__(
         self,
@@ -60,7 +63,9 @@ class ZeroShotLearningProcessor:
         default_threshold_reference: float = 0.3,
         default_threshold_target: float = 0.65,
         default_reference_path: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reference_features.pth"),
-        device: str = "cuda"
+        device: str = "cuda",
+        seed: int = 42,
+        deterministic: bool = True,
     ) -> None:
         self.model = VisualPrompter(type="sam", backbone=backbone, device=device)
         self.use_attn_sim = use_attn_sim
@@ -70,6 +75,7 @@ class ZeroShotLearningProcessor:
         self.threshold_target: float
         
         self._initialize_reference()
+        set_random_seed(seed, logger, deterministic)
 
     def _initialize_reference(self) -> None:
         """Initialize reference information."""
