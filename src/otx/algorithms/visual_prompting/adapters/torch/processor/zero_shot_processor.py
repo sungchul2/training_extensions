@@ -793,9 +793,9 @@ class ZeroShotLearningProcessor:
                 reference_feat = None
                 default_threshold_reference = self.default_threshold_reference
                 while reference_feat is None:
-                    logger.info(f"[*] default_threshold_reference : {default_threshold_reference}")
-                    reference_feat, reference_embedding = self._generate_masked_features(ref_feat, ref_mask, self.default_threshold_reference)
-                    default_threshold_reference -= 0.1
+                    logger.info(f"[*] default_threshold_reference : {default_threshold_reference:.4f}")
+                    reference_feat, reference_embedding = self._generate_masked_features(ref_feat, ref_mask, default_threshold_reference)
+                    default_threshold_reference -= 0.05
 
                 reference_feats.append(reference_feat)
                 reference_embeddings.append(reference_embedding)
