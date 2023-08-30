@@ -124,7 +124,7 @@ class ZeroShotLearningProcessor:
         is_cascade: bool = True,
         version: int = 2,
         num_bg_points: int = 50,
-    ) -> List[np.ndarray]:
+    ) -> Tuple[List[np.ndarray], List[Any]]:
         """Generate points, labels, and attention similarity which can be used for zero-shot inference.
         
         Args:
@@ -139,7 +139,8 @@ class ZeroShotLearningProcessor:
             num_bg_points (int): The number of background points to be used on version2, defaults to 50.
             
         Returns:
-            (np.ndarray): Predicted mask along with similarity score.
+            (list): List of predicted masks along with similarity score.
+            (list): List of sampled points used for target segmentation.
         """
         if version == 1:
             logger.warning("point selection version=1 will be deprecated, please use version=2.")
@@ -151,14 +152,17 @@ class ZeroShotLearningProcessor:
         target_feat = target_feat.reshape(c_feat, h_feat * w_feat)
         
         predicted_masks = []
+        used_points = []
         used_reference_features = self.reference_feats if manual_ref_feats is None else [manual_ref_feats]
         for reference_feats in used_reference_features:
             num_classes = len(reference_feats)
             # Positive-negative location prior
             predicted_mask = np.zeros((h_img, w_img, num_classes + 1), dtype=np.float32)
+            used_point = []
             for i, ref_feat in enumerate(reference_feats):
                 if ref_feat is None:
                     # empty class
+                    used_point.append([])
                     continue
 
                 sim = ref_feat @ target_feat
@@ -205,10 +209,14 @@ class ZeroShotLearningProcessor:
                             ))
 
                         mask = self._predict_mask(**inputs)
+                        score = np.mean([sim.detach().cpu().numpy()[point[1], point[0]] for point, label in zip(point_coords, point_labels) if label == 1])
                         if return_score:
-                            predicted_mask[...,i+1][mask] = np.mean([sim.detach().cpu().numpy()[point[1], point[0]] for point, label in zip(point_coords, point_labels) if label == 1])
+                            predicted_mask[...,i+1][mask] = score
                         else:
                             predicted_mask[...,i+1] += mask.astype(np.float32)
+                        used_point += [
+                            [float(point[0]), float(point[1]), float(sim.detach().cpu().numpy()[point[1], point[0]])] 
+                            for point, label in zip(point_coords, point_labels) if label == 1]
 
                 elif version == 2:
                     sim = sim.reshape(h_feat, w_feat)
@@ -248,10 +256,12 @@ class ZeroShotLearningProcessor:
                             predicted_mask[...,i+1][mask] = score
                         else:
                             predicted_mask[...,i+1] += mask.astype(np.float32)
+                        used_point.append([float(x), float(y), float(score)])
                     
                 predicted_mask[...,i+1] = np.clip(predicted_mask[...,i+1], 0, 1)
             predicted_masks.append(predicted_mask)
-        return predicted_masks
+            used_points.append(used_point)
+        return predicted_masks, used_points
 
     def _point_selection(
         self,
@@ -399,7 +409,13 @@ class ZeroShotLearningProcessor:
         
         return masks[best_idx]
 
-    def _auto_generation_feature_matching(self, target_feat: torch.Tensor, target_image: np.ndarray, return_score: bool, manual_ref_feats: Optional[List[torch.Tensor]] = None) -> List[np.ndarray]:
+    def _auto_generation_feature_matching(
+        self,
+        target_feat: torch.Tensor,
+        target_image: np.ndarray,
+        return_score: bool,
+        manual_ref_feats: Optional[List[torch.Tensor]] = None
+    ) -> Tuple[List[np.ndarray], List[Any]]:
         """Predict target masks using auto generation.
         
         Args:
@@ -409,14 +425,17 @@ class ZeroShotLearningProcessor:
             manual_ref_feats (list, optional): Not to use all of generated reference features, defaults to None.
             
         Returns:
-            (np.ndarray): Predicted mask along with similarity score.
+            (list): List of predicted masks along with similarity score.
+            (list): List of sampled points used for target segmentation.
         """
         auto_gen_masks = self.model.auto_generator.generate(target_image)
         predicted_masks = []
+        used_points = []
         used_reference_features = self.reference_feats if manual_ref_feats is None else [manual_ref_feats]
         for reference_feats in used_reference_features:
             num_classes = len(reference_feats)
             predicted_mask = np.zeros(target_image.shape[:2] + (num_classes + 1,), dtype=np.float32)
+            used_point = []
             for i, ref_feat in enumerate(reference_feats):
                 for auto_gen_mask in auto_gen_masks:
                     target_mask = torch.tensor(auto_gen_mask["segmentation"], dtype=torch.float32)
@@ -426,14 +445,17 @@ class ZeroShotLearningProcessor:
 
                     masked_target_feat = masked_target_feat.permute(1, 0)
                     sim = ref_feat @ masked_target_feat
+                    score = sim.detach().cpu().numpy()[0,0]
                     if return_score:
-                        predicted_mask[...,i+1][auto_gen_mask["segmentation"]] = sim.detach().cpu().numpy()[0,0]
+                        predicted_mask[...,i+1][auto_gen_mask["segmentation"]] = score
                     else:
                         if sim >= self.default_threshold_target:
                             predicted_mask[...,i+1] += auto_gen_mask["segmentation"].astype(np.float32)
+                    used_point.append(auto_gen_mask["point_coords"][0] + [score])
                 predicted_mask[...,i+1] = np.clip(predicted_mask[...,i+1], 0, 1)
-            predicted_mask.append(predicted_mask)
-        return predicted_masks
+            predicted_masks.append(predicted_mask)
+            used_points.append(used_point)
+        return predicted_masks, used_points
 
     def _preprocess_prompts(
         self,
@@ -813,12 +835,19 @@ class ZeroShotLearningProcessor:
 
         if params.get("do_target_seg", DEFAULT_SETTINGS["reference"]["do_target_seg"]):
             for image, manual_ref_feats in zip(images, self.reference_feats):
-                reference_results["results_target"] += self._infer_target_segmentation(
+                total_predicted_masks, total_used_points = self._infer_target_segmentation(
                     [image], params.get("target_params", DEFAULT_SETTINGS["reference"]["target_params"]), manual_ref_feats)
+                reference_results["results_target"] += total_predicted_masks
+                reference_results["results_target_points"] += total_used_points
 
         return reference_results
 
-    def _infer_target_segmentation(self, images: List[np.ndarray], params: Dict[str, Any], manual_ref_feats: Optional[List[torch.Tensor]] = None) -> List[List[np.ndarray]]:
+    def _infer_target_segmentation(
+        self,
+        images: List[np.ndarray],
+        params: Dict[str, Any],
+        manual_ref_feats: Optional[List[torch.Tensor]] = None
+    ) -> Tuple[List[List[np.ndarray]], List[Any]]:
         """Referring segmentation to targets using reference features.
         
         Args:
@@ -828,6 +857,7 @@ class ZeroShotLearningProcessor:
 
         Returns:
             (list): List of results of each target image. Each result is a mask with CxHxW shape.
+            (list): List of sampled points used for target segmentation.
         """
         if len(params) == 0:
             logger.info((
@@ -837,13 +867,14 @@ class ZeroShotLearningProcessor:
         mode = params.get("mode", DEFAULT_SETTINGS["target"]["mode"])
         return_score = params.get("return_score", DEFAULT_SETTINGS["target"]["return_score"])
         total_predicted_masks = []
+        total_used_points = []
         for image in images:
             self.model.set_image(image)
             target_feat = self.model.features.squeeze()
             if mode == "auto_generation":
-                predicted_masks = self._auto_generation_feature_matching(target_feat.permute(1, 2, 0), image, return_score, manual_ref_feats=manual_ref_feats)
+                predicted_masks, used_points = self._auto_generation_feature_matching(target_feat.permute(1, 2, 0), image, return_score, manual_ref_feats=manual_ref_feats)
             elif mode == "point_selection":
-                predicted_masks = self._point_selection_feature_matching(
+                predicted_masks, used_points = self._point_selection_feature_matching(
                     target_feat, image, return_score,
                     manual_ref_feats=manual_ref_feats,
                     is_cascade=params.get("is_cascade", DEFAULT_SETTINGS["target"].get("is_cascade")),
@@ -852,7 +883,8 @@ class ZeroShotLearningProcessor:
             else:
                 continue
             total_predicted_masks.append(predicted_masks)
-        return total_predicted_masks
+            total_used_points.append(used_points)
+        return total_predicted_masks, total_used_points
 
     def __inspect_image_format(self, images: List[Union[np.ndarray, Image.Image]]) -> List[np.ndarray]:
         assert isinstance(images, (tuple, list)), f"images must be wrapped by iterable instances, list or tuple, given {type(images)}."
