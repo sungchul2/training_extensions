@@ -331,7 +331,7 @@ class ZeroShotLearningProcessor:
 
         elif version == 2:
             h_sim, w_sim = mask_sim.shape
-            scale = max(height / h_sim, width / w_sim)
+            scale = min(height / h_sim, width / w_sim)
             point_coords = torch.where(mask_sim > threshold)
             points_scores = torch.stack(point_coords[::-1] + (mask_sim[point_coords],), dim=0).T # (x, y, score)
             points_scores = points_scores[torch.argsort(points_scores[:,-1], descending=True)]
