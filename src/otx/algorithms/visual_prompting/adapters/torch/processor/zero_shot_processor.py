@@ -673,6 +673,7 @@ class ZeroShotLearningProcessor:
             (dict): Base visual prompting results.
         """
         results_visual_prompts = []
+        self.model.reset_image()
         for image, prompt in zip(images, prompts):
             height, width, _ = image.shape
             self.model.set_image(image)
@@ -773,6 +774,7 @@ class ZeroShotLearningProcessor:
             self._initialize_reference()
 
         reference_results = defaultdict(list)
+        self.model.reset_image()
         for image, prompt in zip(images, prompts):
             height, width, _ = image.shape
             self.model.set_image(image)
@@ -831,8 +833,6 @@ class ZeroShotLearningProcessor:
                 ), axis=2)
             )
 
-            self.model.reset_image()
-
         if params.get("do_target_seg", DEFAULT_SETTINGS["reference"]["do_target_seg"]):
             for image, manual_ref_feats in zip(images, self.reference_feats):
                 total_predicted_masks, total_used_points = self._infer_target_segmentation(
@@ -868,6 +868,8 @@ class ZeroShotLearningProcessor:
         return_score = params.get("return_score", DEFAULT_SETTINGS["target"]["return_score"])
         total_predicted_masks = []
         total_used_points = []
+
+        self.model.reset_image()
         for image in images:
             self.model.set_image(image)
             target_feat = self.model.features.squeeze()
