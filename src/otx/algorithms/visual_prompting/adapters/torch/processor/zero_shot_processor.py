@@ -280,7 +280,6 @@ class ZeroShotLearningProcessor:
             else:
                 point_coords = torch.where(mask_sim > threshold)
                 fg_coords_scores = torch.stack(point_coords[::-1] + (mask_sim[point_coords],), dim=0).T
-                fg_coords_scores = fg_coords_scores[torch.argsort(fg_coords_scores[:,-1], descending=True)]
                 
                 max_len = max(self.model.original_size)
                 ratio = self.model.image_size / max_len
@@ -288,7 +287,8 @@ class ZeroShotLearningProcessor:
                 n_w = width // 16
                 
                 res = (fg_coords_scores[:,1] * ratio // 16 * n_w + fg_coords_scores[:,0] * ratio // 16).to(torch.int32)
-                points_scores = torch.stack([fg_coords_scores[res == r][0] for r in torch.unique(res)], axis=0).cpu().numpy()
+                points_scores = torch.stack([fg_coords_scores[res == r][0] for r in torch.unique(res)], axis=0)
+                points_scores = points_scores[torch.argsort(points_scores[:,-1], descending=True)].cpu().numpy()
 
         elif version == 2:
             h_sim, w_sim = mask_sim.shape
