@@ -148,13 +148,16 @@ class ZeroShotLearningProcessor:
         target_feat = target_feat / target_feat.norm(dim=0, keepdim=True)
         target_feat = target_feat.reshape(c_feat, h_feat * w_feat)
         
-        predicted_masks = []
+        total_results = []
         used_points = []
         used_reference_features = self.reference_feats if manual_ref_feats is None else [manual_ref_feats]
         for reference_feats in used_reference_features:
             num_classes = len(reference_feats)
             # Positive-negative location prior
-            predicted_mask = np.zeros((h_img, w_img, num_classes + 1), dtype=np.float32)
+            predicted_masks = []
+            bboxes = []
+            scores = []
+            classes = []
             used_point = []
             for i, ref_feat in enumerate(reference_feats):
                 if ref_feat is None:
@@ -174,7 +177,12 @@ class ZeroShotLearningProcessor:
                     points_scores, bg_coords = self._point_selection(
                         sim, h_img, w_img, topk=topk, threshold=threshold, version=version, num_bg_points=1)
                     for x, y, score in points_scores:
-                        if predicted_mask[int(y), int(x), i+1] > 0:
+                        is_done = False
+                        for pm in predicted_masks:
+                            if pm[int(y), int(x)] > 0:
+                                is_done = True
+                                break
+                        if is_done:
                             continue
 
                         inputs = {
@@ -194,10 +202,12 @@ class ZeroShotLearningProcessor:
 
                         mask = self._predict_mask(**inputs)
 
-                        if return_score:
-                            predicted_mask[...,i+1][mask] = score
-                        else:
-                            predicted_mask[...,i+1] += mask.astype(np.float32)
+                        # set bbox based on predicted mask
+                        ys, xs = np.nonzero(mask)
+                        bboxes.append([xs.min(), ys.min(), xs.max(), ys.max()])
+                        scores.append(score)
+                        classes.append(i+1)
+                        predicted_masks.append(mask.astype(np.uint8))
                         used_point.append([float(x), float(y), float(score)])
 
                 elif version == 2:
@@ -215,7 +225,12 @@ class ZeroShotLearningProcessor:
                     for x, y, score in points_scores:
                         if bg_mask[int(y), int(x)]:
                             continue
-                        if predicted_mask[int(y), int(x), i+1] > 0:
+                        is_done = False
+                        for pm in predicted_masks:
+                            if pm[int(y), int(x)] > 0:
+                                is_done = True
+                                break
+                        if is_done:
                             continue
                             
                         # TODO : add background points as prompts?
@@ -234,17 +249,18 @@ class ZeroShotLearningProcessor:
                                 break
                         if include_bg:
                             continue
-                        
-                        if return_score:
-                            predicted_mask[...,i+1][mask] = score
-                        else:
-                            predicted_mask[...,i+1] += mask.astype(np.float32)
+
+                        # set bbox based on predicted mask
+                        ys, xs = np.nonzero(mask)
+                        bboxes.append([xs.min(), ys.min(), xs.max(), ys.max()])
+                        scores.append(score)
+                        classes.append(i+1)
+                        predicted_masks.append(mask.astype(np.uint8))
                         used_point.append([float(x), float(y), float(score)])
                     
-                predicted_mask[...,i+1] = np.clip(predicted_mask[...,i+1], 0, 1)
-            predicted_masks.append(predicted_mask)
+            total_results.append((scores, classes, bboxes, predicted_masks))
             used_points.append(used_point)
-        return predicted_masks, used_points
+        return total_results, used_points
 
     def _point_selection(
         self,
