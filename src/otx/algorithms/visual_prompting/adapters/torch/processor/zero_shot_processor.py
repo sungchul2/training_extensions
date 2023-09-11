@@ -176,6 +176,8 @@ class ZeroShotLearningProcessor:
                     threshold = 0.85 * sim.max() if num_classes > 1 else self.default_threshold_target
                     points_scores, bg_coords = self._point_selection(
                         sim, h_img, w_img, topk=topk, threshold=threshold, version=version, num_bg_points=1)
+                    if points_scores is None:
+                        continue
                     for x, y, score in points_scores:
                         is_done = False
                         for pm in predicted_masks:
@@ -295,6 +297,9 @@ class ZeroShotLearningProcessor:
 
             else:
                 point_coords = torch.where(mask_sim > threshold)
+                if len(point_coords[0]) == 0:
+                    return None, None
+                
                 fg_coords_scores = torch.stack(point_coords[::-1] + (mask_sim[point_coords],), dim=0).T
                 
                 max_len = max(self.model.original_size)
