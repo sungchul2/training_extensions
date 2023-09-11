@@ -122,7 +122,7 @@ class ZeroShotLearningProcessor:
         topk: int = 0,
         manual_ref_feats: Optional[List[torch.Tensor]] = None,
         is_cascade: bool = True,
-        version: int = 2,
+        version: int = 1,
         num_bg_points: int = 50,
     ) -> Tuple[List[np.ndarray], List[Any]]:
         """Generate points, labels, and attention similarity which can be used for zero-shot inference.
@@ -133,7 +133,7 @@ class ZeroShotLearningProcessor:
             return_score (bool): Whether return prediction score for each instance or the final mask by threshold, defaults to False.
             manual_ref_feats (list, optional): Not to use all of generated reference features, defaults to None.
             is_cascade (bool): Whether use cascaded post-refinements used at PerSAM, defaults to True.
-            version (int): Version of point selection logic, defaults to 2:
+            version (int): Version of point selection logic, defaults to 1:
                 1: point-by-point selection in high resolution similarity map
                 2: use all points in low resolution similarity map
             num_bg_points (int): The number of background points to be used on version2, defaults to 50.
@@ -269,7 +269,7 @@ class ZeroShotLearningProcessor:
         width: int,
         topk: int = 1,
         threshold: float = 0.8,
-        version: int = 2,
+        version: int = 1,
         num_bg_points: int = 50,
     ) -> Tuple[Dict, ...]:
         """Select point used as point prompts."""
