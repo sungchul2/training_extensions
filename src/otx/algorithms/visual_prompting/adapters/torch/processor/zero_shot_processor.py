@@ -411,14 +411,21 @@ class ZeroShotLearningProcessor:
             (list): List of sampled points used for target segmentation.
         """
         auto_gen_masks = self.model.auto_generator.generate(target_image)
-        predicted_masks = []
+        total_results = []
         used_points = []
         used_reference_features = self.reference_feats if manual_ref_feats is None else [manual_ref_feats]
         for reference_feats in used_reference_features:
             num_classes = len(reference_feats)
-            predicted_mask = np.zeros(target_image.shape[:2] + (num_classes + 1,), dtype=np.float32)
+            predicted_masks = []
+            bboxes = []
+            scores = []
+            classes = []
             used_point = []
             for i, ref_feat in enumerate(reference_feats):
+                if ref_feat is None:
+                    # empty class
+                    used_point.append([])
+                    continue
                 for auto_gen_mask in auto_gen_masks:
                     target_mask = torch.tensor(auto_gen_mask["segmentation"], dtype=torch.float32)
                     masked_target_feat, _ = self._generate_masked_features(target_feat, target_mask, 0.5)
@@ -428,16 +435,47 @@ class ZeroShotLearningProcessor:
                     masked_target_feat = masked_target_feat.permute(1, 0)
                     sim = ref_feat @ masked_target_feat
                     score = sim.detach().cpu().numpy()[0,0]
-                    if return_score:
-                        predicted_mask[...,i+1][auto_gen_mask["segmentation"]] = score
-                    else:
-                        if sim >= self.default_threshold_target:
-                            predicted_mask[...,i+1] += auto_gen_mask["segmentation"].astype(np.float32)
-                    used_point.append(auto_gen_mask["point_coords"][0] + [score])
-                predicted_mask[...,i+1] = np.clip(predicted_mask[...,i+1], 0, 1)
-            predicted_masks.append(predicted_mask)
-            used_points.append(used_point)
-        return predicted_masks, used_points
+
+                    if score >= self.default_threshold_target:
+                        mask = target_mask.cpu().numpy()
+                        ys, xs = np.nonzero(mask)
+                        bboxes.append([xs.min(), ys.min(), xs.max(), ys.max()])
+                        scores.append(score)
+                        classes.append(i+1)
+                        predicted_masks.append(mask.astype(np.uint8))
+                        used_point.append(auto_gen_mask["point_coords"][0] + [score])
+
+            filtered_predicted_masks = []
+            filtered_bboxes = []
+            filtered_scores = []
+            filtered_classes = []
+            filtered_used_point = []
+            for idx in np.argsort(scores)[::-1]:
+                score, label, bbox, mask = scores[idx], classes[idx], bboxes[idx], predicted_masks[idx]
+                point = used_point[idx]
+                is_done = False
+                for pm in filtered_predicted_masks:
+                    if pm[int(point[1]), int(point[0])] > 0:
+                        # skip if the point is included in previously predicted masks
+                        is_done = True
+                        break
+
+                    if np.array_equal(np.logical_and(pm, mask), pm):
+                        # skip if the mask contains previously predicted masks
+                        is_done = True
+                        break
+                if is_done:
+                    continue
+
+                filtered_bboxes.append(bbox)
+                filtered_scores.append(score)
+                filtered_classes.append(label)
+                filtered_used_point.append(point)
+                filtered_predicted_masks.append(mask)
+
+            total_results.append((filtered_scores, filtered_classes, filtered_bboxes, filtered_predicted_masks))
+            used_points.append(filtered_used_point)
+        return total_results, used_points
 
     def _preprocess_prompts(
         self,
