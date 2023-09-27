@@ -108,7 +108,7 @@ class ZeroShotLearningProcessor:
             return None, None
 
         masked_feat = feats[masks > threshold_mask]
-        masked_embedding = masked_feat.mean(0).unsqueeze(0)    
+        masked_embedding = masked_feat.mean(0).unsqueeze(0)
         masked_feat = masked_embedding / masked_embedding.norm(dim=-1, keepdim=True)
         masked_embedding = masked_embedding.unsqueeze(0)
         
@@ -205,8 +205,11 @@ class ZeroShotLearningProcessor:
                         mask = self._predict_mask(**inputs)
 
                         # set bbox based on predicted mask
-                        ys, xs = np.nonzero(mask)
-                        bboxes.append([xs.min(), ys.min(), xs.max(), ys.max()])
+                        if mask.sum() == 0:
+                            bboxes.append([])
+                        else:
+                            ys, xs = np.nonzero(mask)
+                            bboxes.append([xs.min(), ys.min(), xs.max(), ys.max()])
                         scores.append(score)
                         classes.append(i+1)
                         predicted_masks.append(mask.astype(np.uint8))
@@ -363,6 +366,7 @@ class ZeroShotLearningProcessor:
                 multimask_output=False
             )
         best_idx = 0
+        height, width = masks[best_idx].shape
 
         if is_cascade:
             # Cascaded Post-refinement-1
@@ -371,7 +375,14 @@ class ZeroShotLearningProcessor:
                         point_labels=point_labels,
                         mask_input=logits[best_idx: best_idx + 1, :, :], 
                         multimask_output=True)
+
             best_idx = np.argmax(scores)
+            while len(scores) > 0 and masks[best_idx].sum() == 0:
+                scores = np.delete(scores, best_idx)
+                masks = np.delete(masks, best_idx, axis=0)
+                best_idx = np.argmax(scores)
+            if len(scores) == 0:
+                return np.zeros((height, width))
 
             # Cascaded Post-refinement-2
             y, x = np.nonzero(masks[best_idx])
@@ -386,8 +397,14 @@ class ZeroShotLearningProcessor:
                 box=input_box[None, :],
                 mask_input=logits[best_idx: best_idx + 1, :, :], 
                 multimask_output=True)
-            
+
             best_idx = np.argmax(scores)
+            while len(scores) > 0 and masks[best_idx].sum() == 0:
+                scores = np.delete(scores, best_idx)
+                masks = np.delete(masks, best_idx, axis=0)
+                best_idx = np.argmax(scores)
+            if len(scores) == 0:
+                return np.zeros((height, width))
         
         return masks[best_idx]
 
