@@ -24,6 +24,8 @@ from otx.algorithms.detection.adapters.mmdet.models.loss_dyns import TrackingLos
 from .l2sp_detector_mixin import L2SPDetectorMixin
 from .sam_detector_mixin import SAMDetectorMixin
 
+from otx.algorithms.common.utils import is_xpu_available
+
 logger = get_logger()
 
 # TODO: Need to check pylint issues
@@ -70,7 +72,8 @@ class CustomSingleStageDetector(SAMDetectorMixin, DetLossDynamicsTrackingMixin, 
         Returns:
             dict[str, Tensor]: A dictionary of loss components.
         """
-        with torch.autograd.profiler_legacy.profile(use_xpu=True) as prof:
+        options = dict(use_xpu=True) if is_xpu_available() else {}
+        with torch.autograd.profiler_legacy.profile(**options) as prof:
             batch_input_shape = tuple(img[0].size()[-2:])
             for img_meta in img_metas:
                 img_meta["batch_input_shape"] = batch_input_shape

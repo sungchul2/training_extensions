@@ -26,6 +26,8 @@ from otx.algorithms.detection.adapters.mmdet.models.loss_dyns import TrackingLos
 from .l2sp_detector_mixin import L2SPDetectorMixin
 from .sam_detector_mixin import SAMDetectorMixin
 
+from otx.algorithms.common.utils import is_xpu_available
+
 logger = get_logger()
 
 # TODO: Need to fix pylint issues
@@ -54,7 +56,8 @@ class CustomYOLOX(SAMDetectorMixin, DetLossDynamicsTrackingMixin, L2SPDetectorMi
 
     def forward_train(self, img, img_metas, gt_bboxes, gt_labels, gt_bboxes_ignore=None, **kwargs):
         """Forward function for CustomYOLOX."""
-        with torch.autograd.profiler_legacy.profile(use_xpu=True) as prof:
+        options = dict(use_xpu=True) if is_xpu_available() else {}
+        with torch.autograd.profiler_legacy.profile(**options) as prof:
             losses = super().forward_train(img, img_metas, gt_bboxes, gt_labels, gt_bboxes_ignore=gt_bboxes_ignore)
         print(prof.key_averages().table())
         return losses

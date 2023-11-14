@@ -17,6 +17,8 @@ from otx.algorithms.common.utils.task_adapt import map_class_names
 
 from .mixin import ClsLossDynamicsTrackingMixin, SAMClassifierMixin
 
+from otx.algorithms.common.utils import is_xpu_available
+
 logger = get_logger()
 
 
@@ -69,7 +71,8 @@ class CustomImageClassifier(SAMClassifierMixin, ClsLossDynamicsTrackingMixin, Im
         Returns:
             dict[str, Tensor]: a dictionary of loss components
         """
-        with torch.autograd.profiler_legacy.profile(use_xpu=True) as prof:
+        options = dict(use_xpu=True) if is_xpu_available() else {}
+        with torch.autograd.profiler_legacy.profile(**options) as prof:
             if self.augments is not None:
                 img, gt_label = self.augments(img, gt_label)
 

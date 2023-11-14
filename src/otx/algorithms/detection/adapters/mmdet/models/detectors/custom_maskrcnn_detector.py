@@ -19,6 +19,8 @@ from otx.algorithms.common.utils.task_adapt import map_class_names
 from .l2sp_detector_mixin import L2SPDetectorMixin
 from .sam_detector_mixin import SAMDetectorMixin
 
+from otx.algorithms.common.utils import is_xpu_available
+
 logger = get_logger()
 
 # pylint: disable=too-many-locals, protected-access, unused-argument
@@ -88,7 +90,8 @@ class CustomMaskRCNN(SAMDetectorMixin, L2SPDetectorMixin, MaskRCNN):
             chkpt_dict[chkpt_name] = model_param
             
     def forward_train(self, *args, **kwargs):
-        with torch.autograd.profiler_legacy.profile(use_xpu=True) as prof:
+        options = dict(use_xpu=True) if is_xpu_available() else {}
+        with torch.autograd.profiler_legacy.profile(**options) as prof:
             losses = super().forward_train(*args, **kwargs)
         print(prof.key_averages().table())
         return losses
