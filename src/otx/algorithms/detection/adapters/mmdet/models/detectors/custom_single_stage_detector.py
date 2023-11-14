@@ -70,11 +70,13 @@ class CustomSingleStageDetector(SAMDetectorMixin, DetLossDynamicsTrackingMixin, 
         Returns:
             dict[str, Tensor]: A dictionary of loss components.
         """
-        batch_input_shape = tuple(img[0].size()[-2:])
-        for img_meta in img_metas:
-            img_meta["batch_input_shape"] = batch_input_shape
-        x = self.extract_feat(img)
-        losses = self.bbox_head.forward_train(x, img_metas, gt_bboxes, gt_labels, gt_bboxes_ignore, **kwargs)
+        with torch.autograd.profiler_legacy.profile(use_xpu=True) as prof:
+            batch_input_shape = tuple(img[0].size()[-2:])
+            for img_meta in img_metas:
+                img_meta["batch_input_shape"] = batch_input_shape
+            x = self.extract_feat(img)
+            losses = self.bbox_head.forward_train(x, img_metas, gt_bboxes, gt_labels, gt_bboxes_ignore, **kwargs)
+        print(prof.key_averages().table())
         return losses
 
     @staticmethod

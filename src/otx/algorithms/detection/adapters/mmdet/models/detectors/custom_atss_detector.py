@@ -81,6 +81,12 @@ class CustomATSS(SAMDetectorMixin, DetLossDynamicsTrackingMixin, L2SPDetectorMix
 
             # Replace checkpoint weight by mixed weights
             chkpt_dict[chkpt_name] = model_param
+            
+    def forward_train(self, *args, **kwargs):
+        with torch.autograd.profiler_legacy.profile(use_xpu=True) as prof:
+            losses = super().forward_train(*args, **kwargs)
+        print(prof.key_averages().table())
+        return losses
 
 
 if is_mmdeploy_enabled():

@@ -54,7 +54,10 @@ class CustomYOLOX(SAMDetectorMixin, DetLossDynamicsTrackingMixin, L2SPDetectorMi
 
     def forward_train(self, img, img_metas, gt_bboxes, gt_labels, gt_bboxes_ignore=None, **kwargs):
         """Forward function for CustomYOLOX."""
-        return super().forward_train(img, img_metas, gt_bboxes, gt_labels, gt_bboxes_ignore=gt_bboxes_ignore)
+        with torch.autograd.profiler_legacy.profile(use_xpu=True) as prof:
+            losses = super().forward_train(img, img_metas, gt_bboxes, gt_labels, gt_bboxes_ignore=gt_bboxes_ignore)
+        print(prof.key_averages().table())
+        return losses
 
     def extract_feat(self, img):
         """Directly extract features from the backbone+neck."""

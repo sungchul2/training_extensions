@@ -69,21 +69,23 @@ class CustomImageClassifier(SAMClassifierMixin, ClsLossDynamicsTrackingMixin, Im
         Returns:
             dict[str, Tensor]: a dictionary of loss components
         """
-        if self.augments is not None:
-            img, gt_label = self.augments(img, gt_label)
+        with torch.autograd.profiler_legacy.profile(use_xpu=True) as prof:
+            if self.augments is not None:
+                img, gt_label = self.augments(img, gt_label)
 
-        x = self.extract_feat(img)
+            x = self.extract_feat(img)
 
-        losses = dict()
+            losses = dict()
 
-        if self.multilabel or self.hierarchical:
-            loss = self.head.forward_train(x, gt_label, **kwargs)
-        else:
-            gt_label = gt_label.squeeze(dim=1)
-            loss = self.head.forward_train(x, gt_label)
+            if self.multilabel or self.hierarchical:
+                loss = self.head.forward_train(x, gt_label, **kwargs)
+            else:
+                gt_label = gt_label.squeeze(dim=1)
+                loss = self.head.forward_train(x, gt_label)
 
-        losses.update(loss)
+            losses.update(loss)
 
+        print(prof.key_averages().table())
         return losses
 
     @staticmethod
