@@ -72,7 +72,7 @@ class CustomSingleStageDetector(SAMDetectorMixin, DetLossDynamicsTrackingMixin, 
         Returns:
             dict[str, Tensor]: A dictionary of loss components.
         """
-        options = dict(use_xpu=True) if is_xpu_available() else {}
+        options = dict(use_xpu=True) if is_xpu_available() else dict(use_cuda=True)
         with torch.autograd.profiler_legacy.profile(**options) as prof:
             batch_input_shape = tuple(img[0].size()[-2:])
             for img_meta in img_metas:

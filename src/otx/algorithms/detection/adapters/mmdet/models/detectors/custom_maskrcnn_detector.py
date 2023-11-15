@@ -90,7 +90,7 @@ class CustomMaskRCNN(SAMDetectorMixin, L2SPDetectorMixin, MaskRCNN):
             chkpt_dict[chkpt_name] = model_param
             
     def forward_train(self, *args, **kwargs):
-        options = dict(use_xpu=True) if is_xpu_available() else {}
+        options = dict(use_xpu=True) if is_xpu_available() else dict(use_cuda=True)
         with torch.autograd.profiler_legacy.profile(**options) as prof:
             losses = super().forward_train(*args, **kwargs)
         print(prof.key_averages().table())

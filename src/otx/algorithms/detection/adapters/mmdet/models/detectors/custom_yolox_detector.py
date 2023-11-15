@@ -56,7 +56,7 @@ class CustomYOLOX(SAMDetectorMixin, DetLossDynamicsTrackingMixin, L2SPDetectorMi
 
     def forward_train(self, img, img_metas, gt_bboxes, gt_labels, gt_bboxes_ignore=None, **kwargs):
         """Forward function for CustomYOLOX."""
-        options = dict(use_xpu=True) if is_xpu_available() else {}
+        options = dict(use_xpu=True) if is_xpu_available() else dict(use_cuda=True)
         with torch.autograd.profiler_legacy.profile(**options) as prof:
             losses = super().forward_train(img, img_metas, gt_bboxes, gt_labels, gt_bboxes_ignore=gt_bboxes_ignore)
         print(prof.key_averages().table())

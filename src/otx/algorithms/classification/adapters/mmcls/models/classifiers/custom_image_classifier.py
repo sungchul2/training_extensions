@@ -71,7 +71,7 @@ class CustomImageClassifier(SAMClassifierMixin, ClsLossDynamicsTrackingMixin, Im
         Returns:
             dict[str, Tensor]: a dictionary of loss components
         """
-        options = dict(use_xpu=True) if is_xpu_available() else {}
+        options = dict(use_xpu=True) if is_xpu_available() else dict(use_cuda=True)
         with torch.autograd.profiler_legacy.profile(**options) as prof:
             if self.augments is not None:
                 img, gt_label = self.augments(img, gt_label)
