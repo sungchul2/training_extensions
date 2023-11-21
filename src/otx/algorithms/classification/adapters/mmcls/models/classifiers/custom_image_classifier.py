@@ -18,8 +18,6 @@ from otx.algorithms.common.utils.task_adapt import map_class_names
 from .mixin import ClsLossDynamicsTrackingMixin, SAMClassifierMixin
 from otx.algorithms.common.adapters.mmcv.utils.fp16_utils import custom_auto_fp16
 
-from otx.algorithms.common.utils import is_xpu_available
-
 logger = get_logger()
 
 
@@ -72,24 +70,21 @@ class CustomImageClassifier(SAMClassifierMixin, ClsLossDynamicsTrackingMixin, Im
         Returns:
             dict[str, Tensor]: a dictionary of loss components
         """
-        options = dict(use_xpu=True) if is_xpu_available() else dict(use_cuda=True)
-        with torch.autograd.profiler_legacy.profile(**options) as prof:
-            if self.augments is not None:
-                img, gt_label = self.augments(img, gt_label)
+        if self.augments is not None:
+            img, gt_label = self.augments(img, gt_label)
 
-            x = self.extract_feat(img)
+        x = self.extract_feat(img)
 
-            losses = dict()
+        losses = dict()
 
-            if self.multilabel or self.hierarchical:
-                loss = self.head.forward_train(x, gt_label, **kwargs)
-            else:
-                gt_label = gt_label.squeeze(dim=1)
-                loss = self.head.forward_train(x, gt_label)
+        if self.multilabel or self.hierarchical:
+            loss = self.head.forward_train(x, gt_label, **kwargs)
+        else:
+            gt_label = gt_label.squeeze(dim=1)
+            loss = self.head.forward_train(x, gt_label)
 
-            losses.update(loss)
+        losses.update(loss)
 
-        print(prof.key_averages().table())
         return losses
 
     @staticmethod

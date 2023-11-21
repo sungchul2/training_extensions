@@ -34,6 +34,9 @@ from mmcv.runner import (
 from mmcv.runner.utils import get_host_info
 from torch.utils.data.dataloader import DataLoader
 
+import torch
+from otx.algorithms.common.utils import is_xpu_available
+
 
 # pylint: disable=too-many-instance-attributes, attribute-defined-outside-init
 @RUNNERS.register_module()
@@ -77,9 +80,12 @@ class EpochRunnerWithCancel(EpochBasedRunner):
             time.sleep(2)  # Prevent possible multi-gpu deadlock during epoch transition
         for i, data_batch in enumerate(self.data_loader):
             self._inner_iter = i
-            self.call_hook("before_train_iter")
-            self.run_iter(data_batch, train_mode=True, **kwargs)
-            self.call_hook("after_train_iter")
+            options = dict(use_xpu=True) if is_xpu_available() else dict(use_cuda=True)
+            with torch.autograd.profiler_legacy.profile(**options) as prof:
+                self.call_hook("before_train_iter")
+                self.run_iter(data_batch, train_mode=True, **kwargs)
+                self.call_hook("after_train_iter")
+            print(prof.key_averages().table())
             if self.stop():
                 break
             self._iter += 1

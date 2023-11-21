@@ -26,7 +26,6 @@ from otx.algorithms.detection.adapters.mmdet.models.loss_dyns import TrackingLos
 from .l2sp_detector_mixin import L2SPDetectorMixin
 from .sam_detector_mixin import SAMDetectorMixin
 
-from otx.algorithms.common.utils import is_xpu_available
 from otx.algorithms.common.adapters.mmcv.utils.fp16_utils import custom_auto_fp16
 
 logger = get_logger()
@@ -54,14 +53,6 @@ class CustomYOLOX(SAMDetectorMixin, DetLossDynamicsTrackingMixin, L2SPDetectorMi
                     task_adapt["src_classes"],  # chkpt_classes
                 )
             )
-
-    def forward_train(self, img, img_metas, gt_bboxes, gt_labels, gt_bboxes_ignore=None, **kwargs):
-        """Forward function for CustomYOLOX."""
-        options = dict(use_xpu=True) if is_xpu_available() else dict(use_cuda=True)
-        with torch.autograd.profiler_legacy.profile(**options) as prof:
-            losses = super().forward_train(img, img_metas, gt_bboxes, gt_labels, gt_bboxes_ignore=gt_bboxes_ignore)
-        print(prof.key_averages().table())
-        return losses
 
     def extract_feat(self, img):
         """Directly extract features from the backbone+neck."""

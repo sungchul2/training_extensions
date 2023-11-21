@@ -20,8 +20,6 @@ from .l2sp_detector_mixin import L2SPDetectorMixin
 from .sam_detector_mixin import SAMDetectorMixin
 from otx.algorithms.common.adapters.mmcv.utils.fp16_utils import custom_auto_fp16
 
-from otx.algorithms.common.utils import is_xpu_available
-
 logger = get_logger()
 
 # pylint: disable=too-many-locals, protected-access, unused-argument
@@ -89,13 +87,6 @@ class CustomMaskRCNN(SAMDetectorMixin, L2SPDetectorMixin, MaskRCNN):
 
             # Replace checkpoint weight by mixed weights
             chkpt_dict[chkpt_name] = model_param
-            
-    def forward_train(self, *args, **kwargs):
-        options = dict(use_xpu=True) if is_xpu_available() else dict(use_cuda=True)
-        with torch.autograd.profiler_legacy.profile(**options) as prof:
-            losses = super().forward_train(*args, **kwargs)
-        print(prof.key_averages().table())
-        return losses
 
     @custom_auto_fp16(apply_to=('img', ))
     def forward(self, img, img_metas, return_loss=True, **kwargs):
