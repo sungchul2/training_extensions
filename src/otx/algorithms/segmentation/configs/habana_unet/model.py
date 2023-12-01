@@ -1,0 +1,33 @@
+"""Model configuration of OCR-Lite-HRnet-18-mod2 model for Segmentation Task."""
+
+# Copyright (C) 2022 Intel Corporation
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions
+# and limitations under the License.
+
+# pylint: disable=invalid-name
+
+_base_ = [
+    "../../../../recipes/stages/segmentation/incremental.py",
+]
+
+model = dict(
+    type="HabanaUNet",
+    num_classes=2,
+    backbone=dict(pretrained=None)
+)
+
+load_from = "~/.cache/torch/hub/checkpoints/epoch=166-step=8183.ckpt"
+
+fp16 = None
+
+log_config=dict(interval=1)

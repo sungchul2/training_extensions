@@ -1,6 +1,6 @@
-"""OTX Algorithms - Segmentation Segmentors."""
+"""Initialization of OCR-Lite-HRnet-18-mod2 model for Segmentation Task."""
 
-# Copyright (C) 2023 Intel Corporation
+# Copyright (C) 2022 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,9 +13,3 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions
 # and limitations under the License.
-
-from .detcon import DetConB, SupConDetConB
-from .mean_teacher_segmentor import MeanTeacherSegmentor
-from .habana_unet import HabanaUNet
-
-__all__ = ["DetConB", "SupConDetConB", "MeanTeacherSegmentor", "HabanaUNet"]
