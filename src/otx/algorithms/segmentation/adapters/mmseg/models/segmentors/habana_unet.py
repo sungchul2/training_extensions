@@ -54,6 +54,7 @@ from mmseg.models.builder import SEGMENTORS
 import warnings
 from torch.nn.modules.loss import _Loss
 from typing import Callable, Optional, Union, Sequence
+import re
 
 
 class DropBlock2D(nn.Module):
@@ -964,8 +965,8 @@ class HabanaUNet(nn.Module):
     def __init__(
         self,
         num_classes,
-        kernels=[3, 3, 3, 3], # manually set
-        strides=[1, 1, 1, 1], # manually set
+        kernels=[3, 3, 3, 3, 3, 3], # manually set
+        strides=[1, 2, 2, 2, 2, 2], # manually set
         in_channels=3,
         normalization_layer="instance",
         negative_slope=0.01,
@@ -1023,6 +1024,17 @@ class HabanaUNet(nn.Module):
         self.apply(self.initialize_weights)
         
         self.loss = Loss(focal=False)
+        
+        self._register_load_state_dict_pre_hook(self.load_state_dict_pre_hook)
+        
+    @staticmethod
+    def load_state_dict_pre_hook(state_dict, *args, **kwargs):
+        revise_keys = [(r"^backbone.", r""), (r"^model.", r"")]
+        for p, r in revise_keys:
+            keys = state_dict.keys()
+            updated_key_pairs = [(k, re.sub(p, r, k)) for k in keys if re.search(p, k)]
+            for orig, new in updated_key_pairs:
+                state_dict[new] = state_dict.pop(orig)
 
     def forward(self, img, img_metas, **kwargs):
         if not kwargs.get("return_loss", True):
@@ -1075,7 +1087,7 @@ class HabanaUNet(nn.Module):
         if self.deep_supervision:
             loss = self.loss(preds[0], label)
             for i, pred in enumerate(preds[1:]):
-                downsampled_label = nn.functional.interpolate(label, pred.shape[2:])
+                downsampled_label = nn.functional.interpolate(label.to(torch.float32), pred.shape[2:])
                 loss += 0.5 ** (i + 1) * self.loss(pred, downsampled_label)
             c_norm = 1 / (2 - 2 ** (-len(preds)))
             return c_norm * loss
