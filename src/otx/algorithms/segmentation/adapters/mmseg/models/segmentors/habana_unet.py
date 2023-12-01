@@ -43,18 +43,20 @@ https://github.com/Project-MONAI/MONAI/tree/dev
 # Copyright (C) 2023 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
-from mmseg.ops import resize
-from enum import Enum
-from otx.algorithms.segmentation.adapters.mmseg.models.segmentors.otx_encoder_decoder import OTXEncoderDecoder
-from mmseg.models.builder import SEGMENTORS
-import warnings
-from torch.nn.modules.loss import _Loss
-from typing import Callable, Optional, Union, Sequence
 import re
+import warnings
+from enum import Enum
+from typing import Callable, Optional, Sequence, Union
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+from mmseg.models.builder import SEGMENTORS
+from mmseg.ops import resize
+from torch import nn
+from torch.nn.modules.loss import _Loss
+
+from otx.algorithms.segmentation.adapters.mmseg.models.segmentors.otx_encoder_decoder import OTXEncoderDecoder
 
 
 class DropBlock2D(nn.Module):
@@ -87,10 +89,9 @@ class DropBlock2D(nn.Module):
     def forward(self, x):
         # shape: (bsize, channels, height, width)
 
-        assert x.dim() == 4, \
-            "Expected input with 4 dimensions (bsize, channels, height, width)"
+        assert x.dim() == 4, "Expected input with 4 dimensions (bsize, channels, height, width)"
 
-        if not self.training or self.drop_prob == 0.:
+        if not self.training or self.drop_prob == 0.0:
             return x
         else:
             # get gamma value
@@ -114,10 +115,12 @@ class DropBlock2D(nn.Module):
             return out
 
     def _compute_block_mask(self, mask):
-        block_mask = F.max_pool2d(input=mask[:, None, :, :],
-                                  kernel_size=(self.block_size, self.block_size),
-                                  stride=(1, 1),
-                                  padding=self.block_size // 2)
+        block_mask = F.max_pool2d(
+            input=mask[:, None, :, :],
+            kernel_size=(self.block_size, self.block_size),
+            stride=(1, 1),
+            padding=self.block_size // 2,
+        )
 
         if self.block_size % 2 == 0:
             block_mask = block_mask[:, :, :-1, :-1]
@@ -127,7 +130,7 @@ class DropBlock2D(nn.Module):
         return block_mask
 
     def _compute_gamma(self, x):
-        return self.drop_prob / (self.block_size ** 2)
+        return self.drop_prob / (self.block_size**2)
 
 
 class DropBlock3D(DropBlock2D):
@@ -157,10 +160,9 @@ class DropBlock3D(DropBlock2D):
     def forward(self, x):
         # shape: (bsize, channels, depth, height, width)
 
-        assert x.dim() == 5, \
-            "Expected input with 5 dimensions (bsize, channels, depth, height, width)"
+        assert x.dim() == 5, "Expected input with 5 dimensions (bsize, channels, depth, height, width)"
 
-        if not self.training or self.drop_prob == 0.:
+        if not self.training or self.drop_prob == 0.0:
             return x
         else:
             # get gamma value
@@ -184,10 +186,12 @@ class DropBlock3D(DropBlock2D):
             return out
 
     def _compute_block_mask(self, mask):
-        block_mask = F.max_pool3d(input=mask[:, None, :, :, :],
-                                  kernel_size=(self.block_size, self.block_size, self.block_size),
-                                  stride=(1, 1, 1),
-                                  padding=self.block_size // 2)
+        block_mask = F.max_pool3d(
+            input=mask[:, None, :, :, :],
+            kernel_size=(self.block_size, self.block_size, self.block_size),
+            stride=(1, 1, 1),
+            padding=self.block_size // 2,
+        )
 
         if self.block_size % 2 == 0:
             block_mask = block_mask[:, :, :-1, :-1, :-1]
@@ -197,7 +201,7 @@ class DropBlock3D(DropBlock2D):
         return block_mask
 
     def _compute_gamma(self, x):
-        return self.drop_prob / (self.block_size ** 3)
+        return self.drop_prob / (self.block_size**3)
 
 
 class LinearScheduler(nn.Module):
@@ -388,14 +392,13 @@ class OutputBlock(nn.Module):
 
     def forward(self, input_data):
         return self.conv(input_data)
-    
-    
+
+
 ##########################
 ########## Loss ##########
 ##########################
 def one_hot(labels: torch.Tensor, num_classes: int, dtype: torch.dtype = torch.float, dim: int = 1) -> torch.Tensor:
-    """
-    For every value v in `labels`, the value in the output will be either 1 or 0. Each vector along the `dim`-th
+    """For every value v in `labels`, the value in the output will be either 1 or 0. Each vector along the `dim`-th
     dimension has the "one-hot" format, i.e., it has a total length of `num_classes`,
     with a one and `num_class-1` zeros.
     Note that this will include the background label, thus a binary mask should be treated as having two classes.
@@ -409,7 +412,6 @@ def one_hot(labels: torch.Tensor, num_classes: int, dtype: torch.dtype = torch.f
         dim: the dimension to be converted to `num_classes` channels from `1` channel, should be non-negative number.
 
     Example:
-
     For a tensor `labels` of dimensions [B]1[spatial_dims], return a tensor of dimensions `[B]N[spatial_dims]`
     when `num_classes=N` number of classes and `dim=1`.
 
@@ -447,8 +449,7 @@ def one_hot(labels: torch.Tensor, num_classes: int, dtype: torch.dtype = torch.f
 
 
 class StrEnum(str, Enum):
-    """
-    Enum subclass that converts its value to a string.
+    """Enum subclass that converts its value to a string.
 
     .. code-block:: python
 
@@ -472,22 +473,20 @@ class StrEnum(str, Enum):
 
 
 class LossReduction(StrEnum):
-    """
-    See also:
-        - :py:class:`monai.losses.dice.DiceLoss`
-        - :py:class:`monai.losses.dice.GeneralizedDiceLoss`
-        - :py:class:`monai.losses.focal_loss.FocalLoss`
-        - :py:class:`monai.losses.tversky.TverskyLoss`
+    """See also:
+    - :py:class:`monai.losses.dice.DiceLoss`
+    - :py:class:`monai.losses.dice.GeneralizedDiceLoss`
+    - :py:class:`monai.losses.focal_loss.FocalLoss`
+    - :py:class:`monai.losses.tversky.TverskyLoss`.
     """
 
     NONE = "none"
     MEAN = "mean"
     SUM = "sum"
 
-    
+
 class DiceLoss(_Loss):
-    """
-    Compute average Dice loss between two tensors. It can support both multi-classes and multi-labels tasks.
+    """Compute average Dice loss between two tensors. It can support both multi-classes and multi-labels tasks.
     Input logits `input` (BNHW[D] where N is number of classes) is compared with ground truth `target` (BNHW[D]).
     Axis N of `input` is expected to have logit predictions for each class rather than being image channels,
     while the same axis of `target` can be 1 or N (one-hot format). The `smooth_nr` and `smooth_dr` parameters are
@@ -515,8 +514,7 @@ class DiceLoss(_Loss):
         smooth_dr: float = 1e-5,
         batch: bool = False,
     ) -> None:
-        """
-        Args:
+        """Args:
             include_background: if False channel index 0 (background category) is excluded from the calculation.
             to_onehot_y: whether to convert `y` into the one-hot format. Defaults to False.
             sigmoid: if True, apply a sigmoid function to the prediction.
@@ -561,10 +559,8 @@ class DiceLoss(_Loss):
         self.smooth_dr = float(smooth_dr)
         self.batch = batch
 
-
     def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
+        """Args:
             input: the shape should be BNH[WD].
             target: the shape should be BNH[WD].
 
@@ -584,7 +580,6 @@ class DiceLoss(_Loss):
                 # [Habana]
                 input = F.softmax(input, 1)
 
-
         if self.other_act is not None:
             input = self.other_act(input)
 
@@ -599,9 +594,9 @@ class DiceLoss(_Loss):
                 warnings.warn("single channel prediction, `include_background=False` ignored.")
             else:
                 # if skipping background, removing first channel
-                target_split = target.split([1, target.shape[1]-1], dim=1)
+                target_split = target.split([1, target.shape[1] - 1], dim=1)
                 target = target_split[1]
-                input_split = input.split([1, input.shape[1]-1], dim=1)
+                input_split = input.split([1, input.shape[1] - 1], dim=1)
                 input = input_split[1]
 
         assert (
@@ -640,13 +635,12 @@ class DiceLoss(_Loss):
             raise ValueError(f'Unsupported reduction: {self.reduction}, available options are ["mean", "sum", "none"].')
 
         return f
-    
-    
+
+
 def softmax_focal_loss(
     input: torch.Tensor, target: torch.Tensor, gamma: float = 2.0, alpha: Optional[float] = None
 ) -> torch.Tensor:
-    """
-    FL(pt) = -alpha * (1 - pt)**gamma * log(pt)
+    """FL(pt) = -alpha * (1 - pt)**gamma * log(pt).
 
     where p_i = exp(s_i) / sum_j exp(s_j), t is the target (ground truth) class, and
     s_j is the unnormalized score for class j.
@@ -667,8 +661,7 @@ def softmax_focal_loss(
 def sigmoid_focal_loss(
     input: torch.Tensor, target: torch.Tensor, gamma: float = 2.0, alpha: Optional[float] = None
 ) -> torch.Tensor:
-    """
-    FL(pt) = -alpha * (1 - pt)**gamma * log(pt)
+    """FL(pt) = -alpha * (1 - pt)**gamma * log(pt).
 
     where p = sigmoid(x), pt = p if label is 1 or 1 - p if label is 0
     """
@@ -694,11 +687,10 @@ def sigmoid_focal_loss(
         loss = alpha_factor * loss
 
     return loss
-    
-    
+
+
 class FocalLoss(_Loss):
-    """
-    FocalLoss is an extension of BCEWithLogitsLoss that down-weights loss from
+    """FocalLoss is an extension of BCEWithLogitsLoss that down-weights loss from
     high confidence correct predictions.
 
     Reimplementation of the Focal Loss described in:
@@ -748,8 +740,7 @@ class FocalLoss(_Loss):
         reduction: LossReduction | str = LossReduction.MEAN,
         use_softmax: bool = False,
     ) -> None:
-        """
-        Args:
+        """Args:
             include_background: if False, channel index 0 (background category) is excluded from the loss calculation.
                 If False, `alpha` is invalid when using softmax.
             to_onehot_y: whether to convert the label `y` into the one-hot format. Defaults to False.
@@ -791,8 +782,7 @@ class FocalLoss(_Loss):
         self.class_weight: None | torch.Tensor
 
     def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
+        """Args:
             input: the shape should be BNH[WD], where N is the number of classes.
                 The input should be the original logits since it will be transformed by
                 a sigmoid/softmax in the forward function.
@@ -873,8 +863,8 @@ class FocalLoss(_Loss):
         else:
             raise ValueError(f'Unsupported reduction: {self.reduction}, available options are ["mean", "sum", "none"].')
         return loss
-    
-    
+
+
 class Loss(nn.Module):
     def __init__(self, focal):
         super(Loss, self).__init__()
@@ -965,8 +955,8 @@ class HabanaUNet(nn.Module):
     def __init__(
         self,
         num_classes,
-        kernels=[3, 3, 3, 3, 3, 3], # manually set
-        strides=[1, 2, 2, 2, 2, 2], # manually set
+        kernels=[3, 3, 3, 3, 3, 3],  # manually set
+        strides=[1, 2, 2, 2, 2, 2],  # manually set
         in_channels=3,
         normalization_layer="instance",
         negative_slope=0.01,
@@ -975,7 +965,7 @@ class HabanaUNet(nn.Module):
         drop_block=False,
         residual=False,
         dimension=2,
-        **kwargs
+        **kwargs,
     ):
         super(HabanaUNet, self).__init__()
         self.dim = dimension
@@ -1020,13 +1010,13 @@ class HabanaUNet(nn.Module):
         )
         self.output_block = self.get_output_block(decoder_level=0)
         self.deep_supervision_heads = self.get_deep_supervision_heads()
-        
+
         self.apply(self.initialize_weights)
-        
+
         self.loss = Loss(focal=False)
-        
+
         self._register_load_state_dict_pre_hook(self.load_state_dict_pre_hook)
-        
+
     @staticmethod
     def load_state_dict_pre_hook(state_dict, *args, **kwargs):
         revise_keys = [(r"^backbone.", r""), (r"^model.", r"")]
@@ -1054,23 +1044,18 @@ class HabanaUNet(nn.Module):
             out = [out]
             for i, decoder_out in enumerate(decoder_outputs[2:-1][::-1]):
                 out.append(self.deep_supervision_heads[i](decoder_out))
-                
+
         if kwargs.get("return_loss", True):
             # train
             losses = dict(loss=self.compute_loss(out, kwargs["gt_semantic_seg"]))
             return losses
         else:
             # test
-            resize_shape = img_metas[0][0]['img_shape'][:2]
-            seg_logit = out[:, :, :resize_shape[0], :resize_shape[1]]
-            size = img_metas[0][0]['ori_shape'][:2]
+            resize_shape = img_metas[0][0]["img_shape"][:2]
+            seg_logit = out[:, :, : resize_shape[0], : resize_shape[1]]
+            size = img_metas[0][0]["ori_shape"][:2]
 
-            seg_logit = resize(
-                seg_logit,
-                size=size,
-                mode='bilinear',
-                align_corners=False,
-                warning=False)
+            seg_logit = resize(seg_logit, size=size, mode="bilinear", align_corners=False, warning=False)
 
             if self.num_classes == 1:
                 seg_logit = F.sigmoid(seg_logit)
@@ -1080,9 +1065,9 @@ class HabanaUNet(nn.Module):
                 seg_pred = seg_logit.argmax(dim=1)
             seg_pred = seg_pred.cpu().numpy()
             seg_pred = list(seg_pred)
-            
+
             return seg_pred
-        
+
     def compute_loss(self, preds, label):
         if self.deep_supervision:
             loss = self.loss(preds[0], label)
@@ -1092,7 +1077,7 @@ class HabanaUNet(nn.Module):
             c_norm = 1 / (2 - 2 ** (-len(preds)))
             return c_norm * loss
         return self.loss(preds, label)
-    
+
     def train_step(self, data_batch, optimizer, **kwargs):
         """The iteration step during training.
 
@@ -1124,7 +1109,8 @@ class HabanaUNet(nn.Module):
         outputs = dict(
             loss=losses["loss"],
             log_vars={k: v.detach().cpu() for k, v in losses.items()},
-            num_samples=len(data_batch['img_metas']))
+            num_samples=len(data_batch["img_metas"]),
+        )
 
         return outputs
 
@@ -1140,10 +1126,10 @@ class HabanaUNet(nn.Module):
             out_channels=out_channels,
             negative_slope=self.negative_slope,
         )
-        
+
     def get_output_block(self, decoder_level):
         return OutputBlock(in_channels=self.filters[decoder_level], out_channels=self.num_classes, dim=self.dim)
-    
+
     def get_deep_supervision_heads(self):
         return nn.ModuleList([self.get_output_block(i + 1) for i in range(len(self.upsamples) - 1)])
 

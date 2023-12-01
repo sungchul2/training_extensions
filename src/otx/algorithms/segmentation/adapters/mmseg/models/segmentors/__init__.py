@@ -15,7 +15,7 @@
 # and limitations under the License.
 
 from .detcon import DetConB, SupConDetConB
-from .mean_teacher_segmentor import MeanTeacherSegmentor
 from .habana_unet import HabanaUNet
+from .mean_teacher_segmentor import MeanTeacherSegmentor
 
 __all__ = ["DetConB", "SupConDetConB", "MeanTeacherSegmentor", "HabanaUNet"]
