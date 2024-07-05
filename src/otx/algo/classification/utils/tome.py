@@ -165,10 +165,6 @@ class ToMeTransformerEncoderLayer(TransformerEncoderLayer):
 class ToMeAttention(MultiheadAttention):
     """Modified MultiheadAttention for ToMe."""
 
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.attn_drop = nn.Dropout(self.attn_drop)
-
     def forward(self, x: Tensor, size: Tensor = None) -> tuple[Tensor, Tensor]:
         """Forward pass of the MultiheadAttention module.
 

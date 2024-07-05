@@ -367,35 +367,18 @@ class VisionTransformerForMulticlassCls(ForwardExplainMixInForViT, OTXMulticlass
 class VisionTransformerForMulticlassClsToMe(VisionTransformerForMulticlassCls):
     """VisionTransformer model for multi-class classification with ToMe."""
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        label_info: LabelInfoTypes,
+        arch: VIT_ARCH_TYPE = "deit-tiny",
+        pretrained: bool = True,
+        optimizer: OptimizerCallable = DefaultOptimizerCallable,
+        scheduler: LRSchedulerCallable | LRSchedulerListCallable = DefaultSchedulerCallable,
+        metric: MetricCallable = MultiClassClsMetricCallable,
+        torch_compile: bool = False,
+    ) -> None:
+        super().__init__(label_info, arch, pretrained, optimizer, scheduler, metric, torch_compile)
         self.apply_patch()
-
-    def parse_r(self, num_layers: int, r: list[int] | tuple[int, float] | int) -> list[int]:
-        """Process a constant r or r schedule into a list for use internally.
-
-        r can take the following forms:
-        - int: A constant number of tokens per layer.
-        - Tuple[int, float]: A pair of r, inflection.
-        Inflection describes there the the reduction / layer should trend
-        upward (+1), downward (-1), or stay constant (0). A value of (r, 0)
-        is as providing a constant r. (r, -1) is what we describe in the paper
-        as "decreasing schedule". Any value between -1 and +1 is accepted.
-        - List[int]: A specific number of tokens per layer. For extreme granularity.
-        """
-        inflect = 0
-        if isinstance(r, list):
-            if len(r) < num_layers:
-                r = r + [0] * (num_layers - len(r))
-            return list(r)
-        elif isinstance(r, tuple):
-            r, inflect = r
-
-        min_val = int(r * (1.0 - inflect))
-        max_val = 2 * r - min_val
-        step = (max_val - min_val) / (num_layers - 1)
-
-        return [int(min_val + step * i) for i in range(num_layers)]
 
     def make_tome_class(self, transformer_class) -> nn.Module:  # noqa: ANN001
         """Create a ToMe class from a transformer class."""
@@ -408,11 +391,37 @@ class VisionTransformerForMulticlassClsToMe(VisionTransformerForMulticlassCls):
             """
 
             def forward(self, *args, **kwargs) -> torch.Tensor:
-                self.tome_info["r"] = self.parse_r(len(self.blocks), self.r)
+                self.tome_info["r"] = self.parse_r(len(self.layers), self.r)
                 self.tome_info["size"] = None
                 self.tome_info["source"] = None
 
                 return super().forward(*args, **kwargs)
+
+            def parse_r(self, num_layers: int, r: list[int] | tuple[int, float] | int) -> list[int]:
+                """Process a constant r or r schedule into a list for use internally.
+
+                r can take the following forms:
+                - int: A constant number of tokens per layer.
+                - Tuple[int, float]: A pair of r, inflection.
+                Inflection describes there the the reduction / layer should trend
+                upward (+1), downward (-1), or stay constant (0). A value of (r, 0)
+                is as providing a constant r. (r, -1) is what we describe in the paper
+                as "decreasing schedule". Any value between -1 and +1 is accepted.
+                - List[int]: A specific number of tokens per layer. For extreme granularity.
+                """
+                inflect = 0
+                if isinstance(r, list):
+                    if len(r) < num_layers:
+                        r = r + [0] * (num_layers - len(r))
+                    return list(r)
+                if isinstance(r, tuple):
+                    r, inflect = r
+
+                min_val = int(r * (1.0 - inflect))
+                max_val = 2 * r - min_val
+                step = (max_val - min_val) / (num_layers - 1)
+
+                return [int(min_val + step * i) for i in range(num_layers)]
 
         return ToMeVisionTransformer
 
@@ -429,27 +438,30 @@ class VisionTransformerForMulticlassClsToMe(VisionTransformerForMulticlassCls):
         from otx.algo.classification.utils.attention import MultiheadAttention
         from otx.algo.classification.utils.tome import ToMeAttention, ToMeTransformerEncoderLayer
 
-        self.model.__class__ = self.make_tome_class(self.model.__class__)
-        self.model.r = 0
-        self.model.tome_info = {
-            "r": self.model.r,
+        patched_vision_transformer = self.make_tome_class(self.model.backbone.__class__)
+        self.model.backbone.__class__ = patched_vision_transformer
+        self.model.backbone.r = 0
+        self.model.backbone.tome_info = {
+            "r": self.model.backbone.r,
             "size": None,
             "source": None,
             "trace_source": trace_source,
             "prop_attn": prop_attn,
-            "class_token": self.model.cls_token is not None,
+            "class_token": self.model.backbone.cls_token is not None,
             "distill_token": False,
         }
 
-        if hasattr(self.model, "dist_token") and self.model.dist_token is not None:
-            self.model.tome_info["distill_token"] = True
+        if hasattr(self.model.backbone, "dist_token") and self.model.backbone.dist_token is not None:
+            self.model.backbone.tome_info["distill_token"] = True
 
-        for module in self.model.modules():
+        for module in self.model.backbone.modules():
             if isinstance(module, TransformerEncoderLayer):
                 module.__class__ = ToMeTransformerEncoderLayer
-                module.tome_info = self.model.tome_info
+                module.tome_info = self.model.backbone.tome_info
             elif isinstance(module, MultiheadAttention):
                 module.__class__ = ToMeAttention
+                module.attn_drop = nn.Dropout(module.attn_drop)
+                module.scale = module.head_dims**-0.5
 
 
 class VisionTransformerForMulticlassClsSemiSL(VisionTransformerForMulticlassCls):
