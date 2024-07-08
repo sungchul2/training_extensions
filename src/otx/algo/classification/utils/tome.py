@@ -25,6 +25,7 @@ def bipartite_soft_matching(
     r: int,
     class_token: bool = False,
     distill_token: bool = False,
+    onnx_friendly: bool = False,
 ) -> tuple[Callable, Callable]:
     """Applies ToMe with a balanced matching set (50%, 50%).
 
@@ -76,7 +77,23 @@ def bipartite_soft_matching(
         n, t1, c = src.shape
         unm = src.gather(dim=-2, index=unm_idx.expand(n, t1 - r, c))
         src = src.gather(dim=-2, index=src_idx.expand(n, r, c))
-        dst = dst.scatter_reduce(-2, dst_idx.expand(n, r, c), src, reduce=mode)
+        # dst = dst.scatter_reduce(-2, dst_idx.expand(n, r, c), src, reduce=mode)
+        if not onnx_friendly:
+            dst = dst.scatter_reduce(-2, dst_idx.expand(n, r, c), src, reduce=mode)
+        else:
+            if mode not in ("mean", "sum"):
+                msg = f"ONNX friendly currently supports 'mean' and 'sum' modes, got {mode}"
+                raise NotImplementedError(msg)
+            dst = dst.scatter(-2, dst_idx.expand(n, r, c), src, reduce="add")
+            if mode == "mean":
+                counts = (
+                    torch.stack(
+                        [torch.bincount(dst_idx[i, :, 0], minlength=dst.size(-2)) for i in range(dst_idx.size(0))],
+                        dim=0,
+                    )
+                    + 1
+                )
+                dst = dst / counts[..., None]
 
         if distill_token:
             return torch.cat([unm[:, :1], dst[:, :1], unm[:, 1:], dst[:, 1:]], dim=1)
@@ -154,6 +171,7 @@ class ToMeTransformerEncoderLayer(TransformerEncoderLayer):
                 r,
                 self.tome_info["class_token"],
                 self.tome_info["distill_token"],
+                self.tome_info["onnx_friendly"],
             )
             if self.tome_info["trace_source"]:
                 self.tome_info["source"] = merge_source(merge, x, self.tome_info["source"])

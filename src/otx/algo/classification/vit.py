@@ -449,6 +449,7 @@ class VisionTransformerForMulticlassClsToMe(VisionTransformerForMulticlassCls):
             "prop_attn": prop_attn,
             "class_token": self.model.backbone.cls_token is not None,
             "distill_token": False,
+            "onnx_friendly": False,
         }
 
         if hasattr(self.model.backbone, "dist_token") and self.model.backbone.dist_token is not None:
@@ -462,6 +463,11 @@ class VisionTransformerForMulticlassClsToMe(VisionTransformerForMulticlassCls):
                 module.__class__ = ToMeAttention
                 module.attn_drop = nn.Dropout(module.attn_drop)
                 module.scale = module.head_dims**-0.5
+
+    def forward_for_tracing(self, image: torch.Tensor) -> torch.Tensor | dict[str, torch.Tensor]:
+        """Model forward function used for the model tracing during model exportation."""
+        self.model.backbone.tome_info["onnx_friendly"] = True
+        return super().forward_for_tracing(image)
 
 
 class VisionTransformerForMulticlassClsSemiSL(VisionTransformerForMulticlassCls):
