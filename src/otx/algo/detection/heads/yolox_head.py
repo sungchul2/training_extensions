@@ -18,6 +18,7 @@ import torch.nn.functional as F  # noqa: N812
 from torch import Tensor, nn
 from torchvision.ops import box_convert
 
+from otx.algo.common.utils.assigners import BaseAssigner
 from otx.algo.common.utils.nms import batched_nms, multiclass_nms
 from otx.algo.common.utils.prior_generators import MlvlPointGenerator
 from otx.algo.common.utils.samplers import PseudoSampler
@@ -54,11 +55,11 @@ class YOLOXHeadModule(BaseDenseHead):
             Defaults to ``partial(nn.BatchNorm2d, momentum=0.03, eps=0.001)``.
         activation (Callable[..., nn.Module]): Activation layer module.
             Defaults to ``Swish``.
-        train_cfg (dict, optional): Training config of anchor head.
-            Defaults to None.
         test_cfg (dict, optional): Testing config of anchor head.
             Defaults to None.
         init_cfg (dict or list[dict], optional): Initialization config dict.
+            Defaults to None.
+        assigner (BaseAssigner | None): Assigner to assign positive/negative samples.
             Defaults to None.
     """
 
@@ -74,9 +75,9 @@ class YOLOXHeadModule(BaseDenseHead):
         conv_bias: bool | str = "auto",
         normalization: Callable[..., nn.Module] = partial(nn.BatchNorm2d, momentum=0.03, eps=0.001),
         activation: Callable[..., nn.Module] = Swish,
-        train_cfg: dict | None = None,
         test_cfg: dict | None = None,
         init_cfg: dict | list[dict] | None = None,
+        assigner: BaseAssigner | None = None,
     ) -> None:
         if init_cfg is None:
             init_cfg = {
@@ -112,12 +113,12 @@ class YOLOXHeadModule(BaseDenseHead):
         self.prior_generator = MlvlPointGenerator(strides, offset=0)  # type: ignore[arg-type]
 
         self.test_cfg = test_cfg
-        self.train_cfg = train_cfg
 
-        if self.train_cfg is not None:
-            self.assigner = self.train_cfg["assigner"]
-            # YOLOX does not support sampling
-            self.sampler = PseudoSampler()  # type: ignore[no-untyped-call]
+        if assigner is not None:
+            self.assigner: BaseAssigner = assigner
+
+        # YOLOX does not support sampling
+        self.sampler = PseudoSampler()  # type: ignore[no-untyped-call]
 
         self._init_layers()
 
@@ -657,7 +658,7 @@ class YOLOXHead:
         cls,
         version: str,
         num_classes: int,
-        train_cfg: dict,
+        assigner: BaseAssigner | None = None,
         test_cfg: dict | None = None,
     ) -> YOLOXHeadModule:
         """Constructor for YOLOXHead."""
@@ -668,6 +669,6 @@ class YOLOXHead:
         return YOLOXHeadModule(
             **cls.YOLOXHEAD_CFG[version],
             num_classes=num_classes,
-            train_cfg=train_cfg,  # TODO (sungchul, kirill): remove
+            assigner=assigner,
             test_cfg=test_cfg,  # TODO (sungchul, kirill): remove
         )

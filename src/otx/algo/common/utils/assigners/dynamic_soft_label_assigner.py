@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Callable
 import numpy as np
 import torch
 import torch.nn.functional
+from otx.algo.common.utils.assigners import BaseAssigner
 from otx.algo.common.utils.structures import AssignResult
 from torch import Tensor
 
@@ -63,7 +64,7 @@ def center_of_mass(masks: Tensor, eps: float = 1e-7) -> Tensor:
     return center
 
 
-class DynamicSoftLabelAssigner:
+class DynamicSoftLabelAssigner(BaseAssigner):
     """Computes matching between predictions and ground truth with dynamic soft label assignment.
 
     Args:

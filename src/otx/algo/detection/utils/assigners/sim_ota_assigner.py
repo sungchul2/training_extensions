@@ -14,7 +14,7 @@ import torch
 import torch.nn.functional as F  # noqa: N812
 from torch import Tensor
 
-from otx.algo.common.utils.assigners import BboxOverlaps2D
+from otx.algo.common.utils.assigners import BaseAssigner, BboxOverlaps2D
 from otx.algo.common.utils.structures import AssignResult
 
 if TYPE_CHECKING:
@@ -24,7 +24,7 @@ INF = 100000.0
 EPS = 1.0e-7
 
 
-class SimOTAAssigner:
+class SimOTAAssigner(BaseAssigner):
     """Computes matching between predictions and ground truth.
 
     Args:

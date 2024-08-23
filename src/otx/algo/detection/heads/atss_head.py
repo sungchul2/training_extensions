@@ -14,8 +14,10 @@ from typing import Any, Callable, ClassVar
 import torch
 from torch import Tensor, nn
 
+from otx.algo.common.utils.assigners import BaseAssigner
 from otx.algo.common.utils.coders import BaseBBoxCoder
 from otx.algo.common.utils.prior_generators import BasePriorGenerator
+from otx.algo.common.utils.samplers import BaseSampler
 from otx.algo.common.utils.utils import multi_apply, reduce_mean
 from otx.algo.detection.heads.anchor_head import AnchorHead
 from otx.algo.detection.heads.class_incremental_mixin import (
@@ -328,7 +330,7 @@ class ATSSHeadModule(ClassIncrementalMixin, AnchorHead):
             flat_anchors,
             valid_flags,
             img_meta["img_shape"][:2],
-            self.train_cfg["allowed_border"],
+            self.allowed_border,
         )
         if not inside_flags.any():
             msg = (
@@ -369,10 +371,10 @@ class ATSSHeadModule(ClassIncrementalMixin, AnchorHead):
             bbox_weights[pos_inds, :] = 1.0
 
             labels[pos_inds] = sampling_result.pos_gt_labels
-            if self.train_cfg["pos_weight"] <= 0:
+            if self.pos_weight <= 0:
                 label_weights[pos_inds] = 1.0
             else:
-                label_weights[pos_inds] = self.train_cfg["pos_weight"]
+                label_weights[pos_inds] = self.pos_weight
         if len(neg_inds) > 0:
             label_weights[neg_inds] = 1.0
 
@@ -412,7 +414,8 @@ class ATSSHead:
         num_classes: int,
         anchor_generator: BasePriorGenerator,
         bbox_coder: BaseBBoxCoder,
-        train_cfg: dict,
+        assigner: BaseAssigner | None = None,
+        sampler: BaseSampler | None = None,
         test_cfg: dict | None = None,
     ) -> ATSSHeadModule:
         """Constructor for ATSSHead."""
@@ -425,6 +428,7 @@ class ATSSHead:
             num_classes=num_classes,
             anchor_generator=anchor_generator,
             bbox_coder=bbox_coder,
-            train_cfg=train_cfg,  # TODO (sungchul, kirill): remove
+            assigner=assigner,
+            sampler=sampler,
             test_cfg=test_cfg,  # TODO (sungchul, kirill): remove
         )

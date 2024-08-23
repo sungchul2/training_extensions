@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import torch
 from torch import Tensor, nn
 
+from otx.algo.common.utils.assigners import BaseAssigner
 from otx.algo.common.utils.coders import BaseBBoxCoder
 from otx.algo.common.utils.prior_generators import BasePriorGenerator
 from otx.algo.common.utils.samplers import PseudoSampler
@@ -29,7 +30,6 @@ class SSDHeadModule(AnchorHead):
         anchor_generator (nn.Module): Config dict for anchor generator.
         bbox_coder (nn.Module): Config of bounding box coder.
         init_cfg (dict, list[dict]): Initialization config dict.
-        train_cfg (dict): Training config of anchor head.
         num_classes (int): Number of categories excluding the background category.
         in_channels (Sequence[int]): Number of channels in the input feature map.
         stacked_convs (int): Number of conv layers in cls and reg tower.
@@ -44,6 +44,10 @@ class SSDHeadModule(AnchorHead):
             coordinates format. Defaults to False. It should be `True` when
             using `IoULoss`, `GIoULoss`, or `DIoULoss` in the bbox head.
         test_cfg (dict, Optional): Testing config of anchor head.
+        assigner (BaseAssigner | None): Assigner to assign positive/negative samples.
+            Defaults to None.
+        allowed_border (int): The border allowed in the loss calculation of anchors. Defaults to -1.
+        pos_weight (int): The weight of positive samples in the loss calculation. Defaults to -1.
     """
 
     def __init__(
@@ -51,7 +55,6 @@ class SSDHeadModule(AnchorHead):
         anchor_generator: nn.Module,
         bbox_coder: nn.Module,
         init_cfg: dict | list[dict],
-        train_cfg: dict,
         num_classes: int = 80,
         in_channels: tuple[int, ...] | int = (512, 1024, 512, 256, 256, 256),
         stacked_convs: int = 0,
@@ -59,6 +62,9 @@ class SSDHeadModule(AnchorHead):
         use_depthwise: bool = False,
         reg_decoded_bbox: bool = False,
         test_cfg: dict | None = None,
+        assigner: BaseAssigner | None = None,
+        allowed_border: int = -1,
+        pos_weight: int = -1,
     ) -> None:
         super(AnchorHead, self).__init__(init_cfg=init_cfg)
         self.num_classes = num_classes
@@ -81,11 +87,15 @@ class SSDHeadModule(AnchorHead):
         self.reg_decoded_bbox = reg_decoded_bbox
         self.use_sigmoid_cls = False
         self.cls_focal_loss = False
-        self.train_cfg = train_cfg
+
+        if assigner is not None:
+            self.assigner: BaseAssigner = assigner
+
+        self.sampler = PseudoSampler(context=self)  # type: ignore[no-untyped-call]
+        self.allowed_border = allowed_border
+        self.pos_weight = pos_weight
+
         self.test_cfg = test_cfg
-        if self.train_cfg:
-            self.assigner = self.train_cfg["assigner"]
-            self.sampler = PseudoSampler(context=self)  # type: ignore[no-untyped-call]
 
     def forward(self, x: tuple[Tensor]) -> tuple[list[Tensor], list[Tensor]]:
         """Forward features from the upstream network.
@@ -232,7 +242,7 @@ class SSDHead:
         anchor_generator: BasePriorGenerator,
         bbox_coder: BaseBBoxCoder,
         init_cfg: dict,
-        train_cfg: dict,
+        assigner: BaseAssigner | None = None,
         test_cfg: dict | None = None,
     ) -> SSDHeadModule:
         """Constructor for SSDHead."""
@@ -246,6 +256,6 @@ class SSDHead:
             anchor_generator=anchor_generator,
             bbox_coder=bbox_coder,
             init_cfg=init_cfg,  # TODO (sungchul, kirill): remove
-            train_cfg=train_cfg,  # TODO (sungchul, kirill): remove
+            assigner=assigner,
             test_cfg=test_cfg,  # TODO (sungchul, kirill): remove
         )

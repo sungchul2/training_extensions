@@ -28,7 +28,6 @@ class SingleStageDetector(BaseModule):
         bbox_head (nn.Module): Bbox head module.
         criterion (nn.Module | None, optional): Criterion module.
         neck (nn.Module | None, optional): Neck module. Defaults to None.
-        train_cfg (dict | None, optional): Training config. Defaults to None.
         test_cfg (dict | None, optional): Test config. Defaults to None.
         init_cfg (dict | list[dict], optional): Initialization config. Defaults to None.
     """
@@ -39,7 +38,6 @@ class SingleStageDetector(BaseModule):
         bbox_head: nn.Module,
         criterion: nn.Module,
         neck: nn.Module | None = None,
-        train_cfg: dict | None = None,
         test_cfg: dict | None = None,
         init_cfg: dict | list[dict] | None = None,
     ) -> None:
@@ -50,7 +48,6 @@ class SingleStageDetector(BaseModule):
         self.neck = neck
         self.criterion = criterion
         self.init_cfg = init_cfg
-        self.train_cfg = train_cfg
         self.test_cfg = test_cfg
 
     def _load_from_state_dict(

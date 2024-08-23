@@ -12,7 +12,7 @@ import copy
 from typing import TYPE_CHECKING, Callable
 
 import torch
-from otx.algo.common.utils.assigners import BboxOverlaps2D
+from otx.algo.common.utils.assigners import BaseAssigner, BboxOverlaps2D
 from otx.algo.common.utils.structures import AssignResult
 from torch import Tensor
 
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from otx.algo.utils.mmengine_utils import InstanceData
 
 
-class MaxIoUAssigner:
+class MaxIoUAssigner(BaseAssigner):
     """Assign a corresponding gt bbox or background to each bbox.
 
     Each proposals will be assigned with `-1`, or a semi-positive integer

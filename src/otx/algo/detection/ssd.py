@@ -88,20 +88,10 @@ class SSD(ExplainableOTXDetModel):
         )
 
     def _build_model(self, num_classes: int) -> SingleStageDetector:
-        train_cfg = {
-            "assigner": MaxIoUAssigner(
-                min_pos_iou=0.0,
-                ignore_iof_thr=-1,
-                gt_max_assign_all=False,
-                pos_iou_thr=0.4,
-                neg_iou_thr=0.4,
-            ),
-            "allowed_border": -1,
-            "pos_weight": -1,
-            "debug": False,
-            "use_giou": False,
-            "use_focal": False,
-        }
+        if self.model_version not in AVAILABLE_MODEL_VERSIONS:
+            msg = f"Model version {self.model_version} is not supported."
+            raise ValueError(msg)
+
         test_cfg = {
             "nms": {"type": "nms", "iou_threshold": 0.45},
             "min_bbox_size": 0,
@@ -127,12 +117,18 @@ class SSD(ExplainableOTXDetModel):
                 target_means=(0.0, 0.0, 0.0, 0.0),
                 target_stds=(0.1, 0.1, 0.2, 0.2),
             ),
+            assigner=MaxIoUAssigner(
+                min_pos_iou=0.0,
+                ignore_iof_thr=-1,
+                gt_max_assign_all=False,
+                pos_iou_thr=0.4,
+                neg_iou_thr=0.4,
+            ),
             init_cfg={
                 "type": "Xavier",
                 "layer": "Conv2d",
                 "distribution": "uniform",
             },  # TODO (sungchul, kirill): remove
-            train_cfg=train_cfg,  # TODO (sungchul, kirill): remove
             test_cfg=test_cfg,  # TODO (sungchul, kirill): remove
         )
         criterion = SSDCriterion(
@@ -146,7 +142,6 @@ class SSD(ExplainableOTXDetModel):
             backbone=backbone,
             bbox_head=bbox_head,
             criterion=criterion,
-            train_cfg=train_cfg,  # TODO (sungchul, kirill): remove
             test_cfg=test_cfg,  # TODO (sungchul, kirill): remove
         )
 

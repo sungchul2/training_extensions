@@ -27,14 +27,6 @@ def input_features():
 class TestRTMDetHead:
     @pytest.fixture()
     def rtmdet_head(self) -> RTMDetHead:
-        train_cfg = {
-            "assigner": DynamicSoftLabelAssigner(topk=13),
-            "sampler": PseudoSampler(),
-            "allowed_border": -1,
-            "pos_weight": -1,
-            "debug": False,
-        }
-
         test_cfg = DictConfig(
             {
                 "nms": {"type": "nms", "iou_threshold": 0.65},
@@ -58,7 +50,8 @@ class TestRTMDetHead:
             pred_kernel_size=1,
             normalization=nn.BatchNorm2d,
             activation=partial(nn.SiLU, inplace=True),
-            train_cfg=train_cfg,
+            assigner=DynamicSoftLabelAssigner(topk=13),
+            sampler=PseudoSampler(),
             test_cfg=test_cfg,
         )
 
@@ -114,14 +107,6 @@ class TestRTMDetHead:
 class TestRTMDetSepBNHeadModule:
     @pytest.fixture()
     def rtmdet_sep_bn_head(self) -> RTMDetSepBNHeadModule:
-        train_cfg = {
-            "assigner": DynamicSoftLabelAssigner(topk=13),
-            "sampler": PseudoSampler(),
-            "allowed_border": -1,
-            "pos_weight": -1,
-            "debug": False,
-        }
-
         test_cfg = DictConfig(
             {
                 "nms": {"type": "nms", "iou_threshold": 0.65},
@@ -147,7 +132,8 @@ class TestRTMDetSepBNHeadModule:
             pred_kernel_size=1,
             normalization=nn.BatchNorm2d,
             activation=partial(nn.SiLU, inplace=True),
-            train_cfg=train_cfg,
+            assigner=DynamicSoftLabelAssigner(topk=13),
+            sampler=PseudoSampler(),
             test_cfg=test_cfg,
         )
 
