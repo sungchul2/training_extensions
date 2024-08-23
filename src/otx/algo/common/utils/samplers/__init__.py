@@ -3,6 +3,6 @@
 #
 """Custom sampler implementations."""
 
-from .base_sampler import PseudoSampler, RandomSampler
+from .base_sampler import BaseSampler, PseudoSampler, RandomSampler
 
-__all__ = ["PseudoSampler", "RandomSampler"]
+__all__ = ["BaseSampler", "PseudoSampler", "RandomSampler"]

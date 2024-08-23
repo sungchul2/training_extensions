@@ -104,7 +104,6 @@ class YOLOX(ExplainableOTXDetModel):
             msg = f"Model version {self.model_version} is not supported."
             raise ValueError(msg)
 
-        train_cfg: dict[str, Any] = {"assigner": SimOTAAssigner(center_radius=2.5)}
         test_cfg = {
             "nms": {"type": "nms", "iou_threshold": 0.65},
             "score_thr": 0.01,
@@ -115,7 +114,7 @@ class YOLOX(ExplainableOTXDetModel):
         bbox_head = YOLOXHead(
             version=self.model_version,
             num_classes=num_classes,
-            train_cfg=train_cfg,  # TODO (sungchul, kirill): remove
+            assigner=SimOTAAssigner(center_radius=2.5),
             test_cfg=test_cfg,  # TODO (sungchul, kirill): remove
         )
         criterion = YOLOXCriterion(
@@ -130,7 +129,6 @@ class YOLOX(ExplainableOTXDetModel):
             neck=neck,
             bbox_head=bbox_head,
             criterion=criterion,
-            train_cfg=train_cfg,  # TODO (sungchul, kirill): remove
             test_cfg=test_cfg,  # TODO (sungchul, kirill): remove
         )
 

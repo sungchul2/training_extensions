@@ -89,13 +89,6 @@ class ATSS(ExplainableOTXDetModel):
             msg = f"Model version {self.model_version} is not supported."
             raise ValueError(msg)
 
-        train_cfg = {
-            "assigner": ATSSAssigner(topk=9),
-            "sampler": PseudoSampler(),
-            "allowed_border": -1,
-            "pos_weight": -1,
-            "debug": False,
-        }
         test_cfg = {
             "nms": {"type": "nms", "iou_threshold": 0.6},
             "min_bbox_size": 0,
@@ -118,7 +111,8 @@ class ATSS(ExplainableOTXDetModel):
                 target_means=(0.0, 0.0, 0.0, 0.0),
                 target_stds=(0.1, 0.1, 0.2, 0.2),
             ),
-            train_cfg=train_cfg,  # TODO (sungchul, kirill): remove
+            assigner=ATSSAssigner(topk=9),
+            sampler=PseudoSampler(),
             test_cfg=test_cfg,  # TODO (sungchul, kirill): remove
         )
         criterion = ATSSCriterion(
@@ -141,7 +135,6 @@ class ATSS(ExplainableOTXDetModel):
             neck=neck,
             bbox_head=bbox_head,
             criterion=criterion,
-            train_cfg=train_cfg,  # TODO (sungchul, kirill): remove
             test_cfg=test_cfg,  # TODO (sungchul, kirill): remove
         )
 

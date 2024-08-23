@@ -118,14 +118,6 @@ class RTMDetInstTiny(RTMDetInst):
         )
 
     def _build_model(self, num_classes: int) -> SingleStageDetector:
-        train_cfg = {
-            "assigner": DynamicSoftLabelAssigner(topk=13),
-            "sampler": PseudoSampler(),
-            "allowed_border": -1,
-            "pos_weight": -1,
-            "debug": False,
-        }
-
         test_cfg = {
             "nms": {"type": "nms", "iou_threshold": 0.5},
             "score_thr": 0.05,
@@ -151,7 +143,8 @@ class RTMDetInstTiny(RTMDetInst):
                 strides=[8, 16, 32],
             ),
             bbox_coder=DistancePointBBoxCoder(),
-            train_cfg=train_cfg,
+            assigner=DynamicSoftLabelAssigner(topk=13),
+            sampler=PseudoSampler(),
             test_cfg=test_cfg,
         )
         criterion = RTMDetInstCriterion(
@@ -174,6 +167,5 @@ class RTMDetInstTiny(RTMDetInst):
             neck=neck,
             bbox_head=bbox_head,
             criterion=criterion,
-            train_cfg=train_cfg,
             test_cfg=test_cfg,
         )

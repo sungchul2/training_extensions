@@ -83,14 +83,6 @@ class RTMDet(ExplainableOTXDetModel):
             msg = f"Model version {self.model_version} is not supported."
             raise ValueError(msg)
 
-        train_cfg = {
-            "assigner": DynamicSoftLabelAssigner(topk=13),
-            "sampler": PseudoSampler(),
-            "allowed_border": -1,
-            "pos_weight": -1,
-            "debug": False,
-        }
-
         test_cfg = {
             "nms": {"type": "nms", "iou_threshold": 0.65},
             "score_thr": 0.001,
@@ -107,7 +99,8 @@ class RTMDet(ExplainableOTXDetModel):
             num_classes=num_classes,
             anchor_generator=MlvlPointGenerator(offset=0, strides=[8, 16, 32]),
             bbox_coder=DistancePointBBoxCoder(),
-            train_cfg=train_cfg,  # TODO (sungchul, kirill): remove
+            assigner=DynamicSoftLabelAssigner(topk=13),
+            sampler=PseudoSampler(),
             test_cfg=test_cfg,  # TODO (sungchul, kirill): remove
         )
         criterion = RTMDetCriterion(
@@ -120,7 +113,6 @@ class RTMDet(ExplainableOTXDetModel):
             neck=neck,
             bbox_head=bbox_head,
             criterion=criterion,
-            train_cfg=train_cfg,  # TODO (sungchul, kirill): remove
             test_cfg=test_cfg,  # TODO (sungchul, kirill): remove
         )
 

@@ -14,9 +14,11 @@ from typing import Any, Callable, ClassVar
 import torch
 from torch import Tensor, nn
 
+from otx.algo.common.utils.assigners import BaseAssigner
 from otx.algo.common.utils.coders import BaseBBoxCoder
 from otx.algo.common.utils.nms import multiclass_nms
 from otx.algo.common.utils.prior_generators import BasePriorGenerator
+from otx.algo.common.utils.samplers import BaseSampler
 from otx.algo.common.utils.utils import distance2bbox, inverse_sigmoid, multi_apply
 from otx.algo.detection.heads.atss_head import ATSSHeadModule
 from otx.algo.detection.utils.prior_generators.utils import anchor_inside_flags
@@ -56,8 +58,6 @@ class RTMDetHead(ATSSHeadModule):
         self.activation = activation
         self.with_objectness = with_objectness
         super().__init__(num_classes, in_channels, **kwargs)
-        if self.train_cfg:
-            self.assigner = self.train_cfg["assigner"]
 
     def _init_layers(self) -> None:
         """Initialize layers of the head."""
@@ -472,7 +472,7 @@ class RTMDetHead(ATSSHeadModule):
             flat_anchors,
             valid_flags,
             img_meta["img_shape"][:2],
-            self.train_cfg["allowed_border"],
+            self.allowed_border,
         )
         if not inside_flags.any():
             return (None,) * 7
@@ -503,10 +503,10 @@ class RTMDetHead(ATSSHeadModule):
             bbox_targets[pos_inds, :] = pos_bbox_targets
 
             labels[pos_inds] = sampling_result.pos_gt_labels
-            if self.train_cfg["pos_weight"] <= 0:
+            if self.pos_weight <= 0:
                 label_weights[pos_inds] = 1.0
             else:
-                label_weights[pos_inds] = self.train_cfg["pos_weight"]
+                label_weights[pos_inds] = self.pos_weight
         if len(neg_inds) > 0:
             label_weights[neg_inds] = 1.0
 
@@ -746,7 +746,8 @@ class RTMDetSepBNHead:
         num_classes: int,
         anchor_generator: BasePriorGenerator,
         bbox_coder: BaseBBoxCoder,
-        train_cfg: dict,
+        assigner: BaseAssigner | None = None,
+        sampler: BaseSampler | None = None,
         test_cfg: dict | None = None,
     ) -> RTMDetSepBNHeadModule:
         """Constructor for RTMDetSepBNHead."""
@@ -759,6 +760,7 @@ class RTMDetSepBNHead:
             num_classes=num_classes,
             anchor_generator=anchor_generator,
             bbox_coder=bbox_coder,
-            train_cfg=train_cfg,  # TODO (sungchul, kirill): remove
+            assigner=assigner,
+            sampler=sampler,
             test_cfg=test_cfg,  # TODO (sungchul, kirill): remove
         )

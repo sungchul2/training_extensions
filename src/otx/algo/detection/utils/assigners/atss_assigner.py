@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Callable
 import torch
 from torch import Tensor
 
-from otx.algo.common.utils.assigners.iou2d_calculator import BboxOverlaps2D
+from otx.algo.common.utils.assigners import BaseAssigner, BboxOverlaps2D
 from otx.algo.common.utils.structures import AssignResult
 
 if TYPE_CHECKING:
@@ -42,7 +42,7 @@ def bbox_center_distance(bboxes: Tensor, priors: Tensor) -> Tensor:
     return (priors_points[:, None, :] - bbox_points[None, :, :]).pow(2).sum(-1).sqrt()
 
 
-class ATSSAssigner:
+class ATSSAssigner(BaseAssigner):
     """Assign a corresponding gt bbox or background to each prior.
 
     Each proposals will be assigned with `0` or a positive integer

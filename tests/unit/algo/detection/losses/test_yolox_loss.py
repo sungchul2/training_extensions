@@ -20,10 +20,13 @@ class TestYOLOXCriterion:
                 "scale_factor": 1,
             },
         ]
-        train_cfg = {
-            "assigner": SimOTAAssigner(center_radius=2.5),
-        }
-        head = YOLOXHeadModule(num_classes=4, in_channels=1, stacked_convs=1, use_depthwise=False, train_cfg=train_cfg)
+        head = YOLOXHeadModule(
+            num_classes=4,
+            in_channels=1,
+            stacked_convs=1,
+            use_depthwise=False,
+            assigner=SimOTAAssigner(center_radius=2.5),
+        )
         feat = [torch.rand(1, 1, s // feat_size, s // feat_size) for feat_size in [4, 8, 16]]
         cls_scores, bbox_preds, objectnesses = head.forward(feat)
 
@@ -44,7 +47,13 @@ class TestYOLOXCriterion:
 
         # When truth is non-empty then both cls and box loss should be nonzero
         # for random inputs
-        head = YOLOXHeadModule(num_classes=4, in_channels=1, stacked_convs=1, use_depthwise=True, train_cfg=train_cfg)
+        head = YOLOXHeadModule(
+            num_classes=4,
+            in_channels=1,
+            stacked_convs=1,
+            use_depthwise=True,
+            assigner=SimOTAAssigner(center_radius=2.5),
+        )
         head.use_l1 = True
         criterion.use_l1 = True
         gt_instances = InstanceData(

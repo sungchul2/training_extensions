@@ -13,8 +13,10 @@ import warnings
 import torch
 from torch import Tensor, nn
 
+from otx.algo.common.utils.assigners import BaseAssigner
 from otx.algo.common.utils.coders import BaseBBoxCoder
 from otx.algo.common.utils.prior_generators import BasePriorGenerator
+from otx.algo.common.utils.samplers import BaseSampler
 from otx.algo.common.utils.utils import multi_apply
 from otx.algo.detection.heads.base_head import BaseDenseHead
 from otx.algo.detection.utils.prior_generators.utils import anchor_inside_flags
@@ -37,7 +39,6 @@ class AnchorHead(BaseDenseHead):
         loss_bbox (nn.Module | None): Module of localization loss.
             It is related to RPNHead for iseg, will be deprecated.
             Defaults to None.
-        train_cfg (dict): Training config of anchor head.
         test_cfg (dict, optional): Testing config of anchor head.
         feat_channels (int): Number of hidden channels. Used in child classes.
         reg_decoded_bbox (bool): If true, the regression loss would be
@@ -46,6 +47,12 @@ class AnchorHead(BaseDenseHead):
             coordinates format. Default False. It should be `True` when
             using `IoULoss`, `GIoULoss`, or `DIoULoss` in the bbox head.
         init_cfg (dict, list[dict], optional): Initialization config dict.
+        assigner (BaseAssigner | None): Assigner to assign positive/negative samples.
+            Defaults to None.
+        sampler (BaseSampler | None): Sampler to sample positive/negative samples.
+            Defaults to None.
+        allowed_border (int): The border allowed in the loss calculation of anchors. Defaults to -1.
+        pos_weight (int): The weight of positive samples in the loss calculation. Defaults to -1.
     """
 
     def __init__(
@@ -54,13 +61,16 @@ class AnchorHead(BaseDenseHead):
         in_channels: tuple[int, ...] | int,
         anchor_generator: BasePriorGenerator,
         bbox_coder: BaseBBoxCoder,
-        train_cfg: dict,
         loss_cls: nn.Module | None = None,  # TODO (kirill): deprecated
         loss_bbox: nn.Module | None = None,  # TODO (kirill): deprecated
         test_cfg: dict | None = None,
         feat_channels: int = 256,
         reg_decoded_bbox: bool = False,
         init_cfg: dict | list[dict] | None = None,
+        assigner: BaseAssigner | None = None,
+        sampler: BaseSampler | None = None,
+        allowed_border: int = -1,
+        pos_weight: int = -1,
     ) -> None:
         super().__init__(init_cfg=init_cfg)
         self.in_channels = in_channels
@@ -80,11 +90,17 @@ class AnchorHead(BaseDenseHead):
         self.bbox_coder = bbox_coder
         self.loss_cls = loss_cls
         self.loss_bbox = loss_bbox
-        self.train_cfg = train_cfg
+
+        if assigner is not None:
+            self.assigner: BaseAssigner = assigner
+
+        if sampler is not None:
+            self.sampler: BaseSampler = sampler
+
+        self.allowed_border = allowed_border
+        self.pos_weight = pos_weight
+
         self.test_cfg = test_cfg
-        if self.train_cfg:
-            self.assigner = self.train_cfg.get("assigner", None)
-            self.sampler = self.train_cfg.get("sampler", None)
 
         self.fp16_enabled = False
 
@@ -238,7 +254,7 @@ class AnchorHead(BaseDenseHead):
             flat_anchors,
             valid_flags,
             img_meta["img_shape"][:2],
-            self.train_cfg["allowed_border"],
+            self.allowed_border,
         )
         if not inside_flags.any():
             msg = (
@@ -251,7 +267,7 @@ class AnchorHead(BaseDenseHead):
         anchors = flat_anchors[inside_flags]
 
         pred_instances = InstanceData(priors=anchors)
-        assign_result = self.assigner.assign(pred_instances, gt_instances, gt_instances_ignore)  # type: ignore[arg-type]
+        assign_result = self.assigner.assign(pred_instances, gt_instances, gt_instances_ignore)
         # No sampling is required except for RPN and
         # Guided Anchoring algorithms
         sampling_result = self.sampler.sample(assign_result, pred_instances, gt_instances)
@@ -278,10 +294,10 @@ class AnchorHead(BaseDenseHead):
             bbox_weights[pos_inds, :] = 1.0
 
             labels[pos_inds] = sampling_result.pos_gt_labels
-            if self.train_cfg["pos_weight"] <= 0:
+            if self.pos_weight <= 0:
                 label_weights[pos_inds] = 1.0
             else:
-                label_weights[pos_inds] = self.train_cfg["pos_weight"]
+                label_weights[pos_inds] = self.pos_weight
         if len(neg_inds) > 0:
             label_weights[neg_inds] = 1.0
 

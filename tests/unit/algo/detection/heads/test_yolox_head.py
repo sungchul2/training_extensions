@@ -46,10 +46,13 @@ class TestYOLOXHeadModule:
                 "scale_factor": 1,
             },
         ]
-        train_cfg = {
-            "assigner": SimOTAAssigner(center_radius=2.5),
-        }
-        head = YOLOXHeadModule(num_classes=4, in_channels=1, stacked_convs=1, use_depthwise=False, train_cfg=train_cfg)
+        head = YOLOXHeadModule(
+            num_classes=4,
+            in_channels=1,
+            stacked_convs=1,
+            use_depthwise=False,
+            assigner=SimOTAAssigner(center_radius=2.5),
+        )
         assert not head.use_l1
         assert isinstance(head.multi_level_cls_convs[0][0], Conv2dModule)
 
@@ -78,5 +81,11 @@ class TestYOLOXHeadModule:
 
         # When truth is non-empty then both cls and box loss should be nonzero
         # for random inputs
-        head = YOLOXHeadModule(num_classes=4, in_channels=1, stacked_convs=1, use_depthwise=True, train_cfg=train_cfg)
+        head = YOLOXHeadModule(
+            num_classes=4,
+            in_channels=1,
+            stacked_convs=1,
+            use_depthwise=True,
+            assigner=SimOTAAssigner(center_radius=2.5),
+        )
         assert isinstance(head.multi_level_cls_convs[0][0], DepthwiseSeparableConvModule)
