@@ -110,24 +110,6 @@ class MaskRCNNResNet50(MaskRCNN):
 
     def _build_model(self, num_classes: int) -> TwoStageDetector:
         train_cfg = {
-            "rpn": {
-                "allowed_border": -1,
-                "debug": False,
-                "pos_weight": -1,
-                "assigner": MaxIoUAssigner(
-                    pos_iou_thr=0.7,
-                    neg_iou_thr=0.3,
-                    min_pos_iou=0.3,
-                    ignore_iof_thr=-1,
-                    match_low_quality=True,
-                ),
-                "sampler": RandomSampler(
-                    add_gt_as_proposals=False,
-                    num=256,
-                    pos_fraction=0.5,
-                    neg_pos_ub=-1,
-                ),
-            },
             "rpn_proposal": {
                 "max_per_img": 1000,
                 "min_bbox_size": 0,
@@ -207,7 +189,16 @@ class MaskRCNNResNet50(MaskRCNN):
             ),
             loss_bbox=L1Loss(loss_weight=1.0),
             loss_cls=CrossEntropyLoss(loss_weight=1.0, use_sigmoid=True),
-            train_cfg=train_cfg["rpn"],
+            assigner=MaxIoUAssigner(
+                pos_iou_thr=0.7,
+                neg_iou_thr=0.3,
+                min_pos_iou=0.3,
+            ),
+            sampler=RandomSampler(
+                num=256,
+                pos_fraction=0.5,
+                add_gt_as_proposals=False,
+            ),
             test_cfg=test_cfg["rpn"],
         )
 
@@ -300,25 +291,6 @@ class MaskRCNNEfficientNet(MaskRCNN):
 
     def _build_model(self, num_classes: int) -> TwoStageDetector:
         train_cfg = {
-            "rpn": {
-                "assigner": MaxIoUAssigner(
-                    pos_iou_thr=0.7,
-                    neg_iou_thr=0.3,
-                    min_pos_iou=0.3,
-                    ignore_iof_thr=-1,
-                    match_low_quality=True,
-                    gpu_assign_thr=300,
-                ),
-                "sampler": RandomSampler(
-                    add_gt_as_proposals=False,
-                    num=256,
-                    pos_fraction=0.5,
-                    neg_pos_ub=-1,
-                ),
-                "allowed_border": -1,
-                "debug": False,
-                "pos_weight": -1,
-            },
             "rpn_proposal": {
                 "max_per_img": 1000,
                 "min_bbox_size": 0,
@@ -402,7 +374,17 @@ class MaskRCNNEfficientNet(MaskRCNN):
             ),
             loss_bbox=L1Loss(loss_weight=1.0),
             loss_cls=CrossEntropyLoss(loss_weight=1.0, use_sigmoid=True),
-            train_cfg=train_cfg["rpn"],
+            assigner=MaxIoUAssigner(
+                pos_iou_thr=0.7,
+                neg_iou_thr=0.3,
+                min_pos_iou=0.3,
+                gpu_assign_thr=300,
+            ),
+            sampler=RandomSampler(
+                num=256,
+                pos_fraction=0.5,
+                add_gt_as_proposals=False,
+            ),
             test_cfg=test_cfg["rpn"],
         )
 
@@ -507,24 +489,6 @@ class MaskRCNNSwinT(MaskRCNN):
 
     def _build_model(self, num_classes: int) -> TwoStageDetector:
         train_cfg = {
-            "rpn": {
-                "assigner": MaxIoUAssigner(
-                    pos_iou_thr=0.7,
-                    neg_iou_thr=0.3,
-                    min_pos_iou=0.3,
-                    ignore_iof_thr=-1,
-                    match_low_quality=True,
-                ),
-                "sampler": RandomSampler(
-                    add_gt_as_proposals=False,
-                    num=256,
-                    pos_fraction=0.5,
-                    neg_pos_ub=-1,
-                ),
-                "allowed_border": -1,
-                "debug": False,
-                "pos_weight": -1,
-            },
             "rpn_proposal": {
                 "max_per_img": 1000,
                 "min_bbox_size": 0,
@@ -612,7 +576,16 @@ class MaskRCNNSwinT(MaskRCNN):
             ),
             loss_bbox=L1Loss(loss_weight=1.0),
             loss_cls=CrossEntropyLoss(loss_weight=1.0, use_sigmoid=True),
-            train_cfg=train_cfg["rpn"],
+            assigner=MaxIoUAssigner(
+                pos_iou_thr=0.7,
+                neg_iou_thr=0.3,
+                min_pos_iou=0.3,
+            ),
+            sampler=RandomSampler(
+                num=256,
+                pos_fraction=0.5,
+                add_gt_as_proposals=False,
+            ),
             test_cfg=test_cfg["rpn"],
         )
 
