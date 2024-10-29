@@ -36,6 +36,8 @@ All notable changes to this project will be documented in this file.
   (https://github.com/openvinotoolkit/training_extensions/pull/4028)
 - Fix SupCon flag
   (https://github.com/openvinotoolkit/training_extensions/pull/4076)
+- Fix MonoDETR recipe
+  (https://github.com/openvinotoolkit/training_extensions/pull/4081)
 
 ## \[2.2.0\]
 
